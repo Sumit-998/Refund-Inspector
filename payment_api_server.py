@@ -1,45 +1,244 @@
+"""
+Payment API Server — Port 8003 (Zenpay)
+Backed by PostgreSQL via psycopg 3.
+Preserves all existing API contracts (API 5 / API 6).
+payments must reference an existing booking_ref in the bookings table.
+"""
+
 import json
+import os
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+import signal
+from db.connection import get_db_cursor, check_db_health, apply_schema
+from core.auth import check_admin_or_internal_from_handler
+
 HOST = "127.0.0.1"
-PORT = 8003
+PORT = int(os.environ.get("PAYMENT_PORT", 8003))
 METHODS = ["UPI", "Credit Card", "Debit Card", "Net Banking"]
+VALID_STATUSES = {"SUCCESS", "REFUNDED", "FAILED", "PENDING", "PROCESSING", "SETTLED"}
 
-# Demo records transcribed from Zenpay's frontend sample data.
-_PAYMENT_ROWS = [
-    ("PAY-90001","BK-20001","MR1001","Aarav Sharma",5400,"SUCCESS","2026-10-01 10:13",0),
-    ("PAY-90002","BK-20002","MR1002","Priya Das",6200,"SUCCESS","2026-10-01 11:41",0),
-    ("PAY-90003","BK-20003","MR1003","Rohan Mehta",7100,"SUCCESS","2026-10-02 09:06",0),
-    ("PAY-90004","BK-20004","MR1004","Ananya Roy",5800,"SUCCESS","2026-10-02 14:31",0),
-    ("PAY-90005","BK-20005","MR1005","Vikram Singh",3200,"REFUNDED","2026-10-03 08:21",3200),
-    ("PAY-90006","BK-20006","MR1006","Sneha Iyer",5400,"FAILED","2026-10-03 16:46",0),
-    ("PAY-90007","BK-20007","MR1007","Kabir Khan",5100,"SUCCESS","2026-10-04 12:01",0),
-    ("PAY-90008","BK-20008","MR1008","Meera Nair",7100,"SUCCESS","2026-10-04 19:11",0),
-    ("PAY-90009","BK-20009","MR1009","Rahul Verma",5400,"SUCCESS","2026-10-05 07:56",0),
-    ("PAY-90010","BK-20010","MR1010","Isha Patel",4500,"SUCCESS","2026-10-05 10:30",0),
-]
 
-TRANSACTIONS = [
-    {
-        "paymentRef": row[0], "bookingRef": row[1], "airlinePnr": row[2],
-        "payer": row[3], "method": METHODS[i % len(METHODS)], "amount": row[4],
-        "status": row[5], "paidAt": row[6], "refundedAmount": row[7],
-        "currency": "INR", "gatewayTxnId": f"ZP{7300000 + i * 137}",
-        "email": row[3].split()[0].lower() + "@example.com"
+# ---------------------------------------------------------------------------
+# Database helpers
+# ---------------------------------------------------------------------------
+
+def _row_to_api(row: dict) -> dict:
+    """Convert DB row to original camelCase API shape."""
+    return {
+        "paymentRef":    row["payment_ref"],
+        "bookingRef":    row["booking_ref"],
+        "airlinePnr":    row.get("airline_pnr", ""),
+        "payer":         row["payer_name"],
+        "method":        row["method"],
+        "amount":        float(row["amount"]),
+        "currency":      row.get("currency", "INR"),
+        "status":        row["status"],
+        "paidAt":        row["paid_at"],
+        "refundedAmount": float(row.get("refunded_amount") or 0),
+        "gatewayTxnId":  row.get("gateway_txn_id", ""),
+        "email":         row.get("email", ""),
     }
-    for i, row in enumerate(_PAYMENT_ROWS)
-]
+
+
+def _ensure_booking_exists(booking_ref: str) -> None:
+    with get_db_cursor() as (cur, _):
+        cur.execute("SELECT 1 FROM bookings WHERE booking_ref = %s", (booking_ref,))
+        if not cur.fetchone():
+            raise ValueError(
+                f"Booking '{booking_ref}' does not exist. "
+                "Create the booking first via the Booking API (port 8001)."
+            )
+
+
+def _db_count_payments() -> int:
+    with get_db_cursor() as (cur, _):
+        cur.execute("SELECT COUNT(*) AS cnt FROM payments")
+        row = cur.fetchone()
+        return int(row["cnt"]) if row else 0
+
+
+def _db_list_payments(status_filter: str | None) -> list[dict]:
+    sql = """
+        SELECT payment_ref, booking_ref, airline_pnr, payer_name, method,
+               amount, currency, status, paid_at, refunded_amount,
+               gateway_txn_id, email
+        FROM payments
+    """
+    params: tuple = ()
+    if status_filter:
+        sql += " WHERE status = %s"
+        params = (status_filter.upper(),)
+    sql += " ORDER BY created_at"
+    with get_db_cursor() as (cur, _):
+        cur.execute(sql, params)
+        return [_row_to_api(r) for r in cur.fetchall()]
+
+
+def _db_get_payment(payment_ref: str) -> dict | None:
+    sql = """
+        SELECT payment_ref, booking_ref, airline_pnr, payer_name, method,
+               amount, currency, status, paid_at, refunded_amount,
+               gateway_txn_id, email
+        FROM payments WHERE payment_ref = %s
+    """
+    with get_db_cursor() as (cur, _):
+        cur.execute(sql, (payment_ref,))
+        row = cur.fetchone()
+        return _row_to_api(row) if row else None
+
+
+def _db_upsert_payment(data: dict) -> tuple[dict, bool]:
+    pref = str(data.get("paymentRef", "")).upper()
+    booking_ref = str(data.get("bookingRef", data.get("booking_ref", ""))).upper()
+
+    if not pref:
+        count = _db_count_payments()
+        pref = f"PAY-{90000 + count + 1}"
+        data["paymentRef"] = pref
+
+    if not booking_ref:
+        raise ValueError("bookingRef is required when creating a payment.")
+
+    _ensure_booking_exists(booking_ref)
+
+    status = str(data.get("status", "PENDING")).upper()
+    if status not in VALID_STATUSES:
+        raise ValueError(f"Invalid status '{status}'. Must be one of {VALID_STATUSES}")
+
+    amount = float(data.get("amount", 0))
+    if amount < 0:
+        raise ValueError("amount must not be negative.")
+
+    refunded_amount = float(data.get("refundedAmount", data.get("refunded_amount", 0)) or 0)
+    if refunded_amount < 0:
+        raise ValueError("refundedAmount must not be negative.")
+    if refunded_amount > amount:
+        raise ValueError("refundedAmount cannot exceed amount.")
+
+    # Derive method index from count for consistent assignment
+    count = _db_count_payments()
+    method = data.get("method") or METHODS[count % len(METHODS)]
+    if method not in METHODS:
+        raise ValueError(f"Invalid method '{method}'. Must be one of {METHODS}")
+
+    gateway_txn_id = data.get("gatewayTxnId") or data.get("gateway_txn_id") or f"ZP{7300000 + count * 137}"
+
+    sql = """
+        INSERT INTO payments (
+            payment_ref, booking_ref, airline_pnr, payer_name, method,
+            amount, currency, status, paid_at, refunded_amount,
+            gateway_txn_id, email
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (payment_ref) DO UPDATE SET
+            booking_ref     = EXCLUDED.booking_ref,
+            airline_pnr     = COALESCE(EXCLUDED.airline_pnr, payments.airline_pnr),
+            payer_name      = EXCLUDED.payer_name,
+            method          = EXCLUDED.method,
+            amount          = EXCLUDED.amount,
+            currency        = EXCLUDED.currency,
+            status          = EXCLUDED.status,
+            paid_at         = EXCLUDED.paid_at,
+            refunded_amount = EXCLUDED.refunded_amount,
+            gateway_txn_id  = COALESCE(EXCLUDED.gateway_txn_id, payments.gateway_txn_id),
+            email           = COALESCE(EXCLUDED.email, payments.email),
+            updated_at      = CURRENT_TIMESTAMP
+        RETURNING payment_ref, (xmax = 0) AS inserted
+    """
+    params = (
+        pref,
+        booking_ref,
+        data.get("airlinePnr") or data.get("airline_pnr"),
+        str(data.get("payer", data.get("payer_name", ""))),
+        method,
+        amount,
+        str(data.get("currency", "INR")),
+        status,
+        str(data.get("paidAt", data.get("paid_at", ""))),
+        refunded_amount,
+        gateway_txn_id,
+        data.get("email"),
+    )
+    with get_db_cursor() as (cur, _):
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        created = bool(row["inserted"]) if row else True
+
+    payment = _db_get_payment(pref)
+    return payment, created
+
+
+def _db_update_payment(payment_ref: str, data: dict) -> dict | None:
+    existing = _db_get_payment(payment_ref)
+    if existing is None:
+        return None
+
+    merged = {**existing, **data}
+    merged["paymentRef"] = payment_ref
+
+    status = str(merged.get("status", "PENDING")).upper()
+    if status not in VALID_STATUSES:
+        raise ValueError(f"Invalid status '{status}'. Must be one of {VALID_STATUSES}")
+
+    amount = float(merged.get("amount", 0))
+    refunded_amount = float(merged.get("refundedAmount", merged.get("refunded_amount", 0)) or 0)
+    if refunded_amount > amount:
+        raise ValueError("refundedAmount cannot exceed amount.")
+
+    sql = """
+        UPDATE payments SET
+            payer_name      = %s,
+            method          = %s,
+            amount          = %s,
+            currency        = %s,
+            status          = %s,
+            paid_at         = %s,
+            refunded_amount = %s,
+            gateway_txn_id  = %s,
+            email           = %s
+        WHERE payment_ref = %s
+    """
+    params = (
+        str(merged.get("payer", merged.get("payer_name", ""))),
+        str(merged.get("method", "UPI")),
+        amount,
+        str(merged.get("currency", "INR")),
+        status,
+        str(merged.get("paidAt", merged.get("paid_at", ""))),
+        refunded_amount,
+        merged.get("gatewayTxnId") or merged.get("gateway_txn_id"),
+        merged.get("email"),
+        payment_ref,
+    )
+    with get_db_cursor() as (cur, _):
+        cur.execute(sql, params)
+
+    return _db_get_payment(payment_ref)
+
+
+# ---------------------------------------------------------------------------
+# HTTP Handler
+# ---------------------------------------------------------------------------
 
 class PaymentAPIHandler(BaseHTTPRequestHandler):
+
+    def log_message(self, format, *args):
+        pass
+
     def send_json(self, status, data):
-        body = json.dumps(data).encode("utf-8")
+        body = json.dumps(data, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Internal-Service-Key, X-CSRF-Token")
         self.end_headers()
         self.wfile.write(body)
 
@@ -47,48 +246,64 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Internal-Service-Key, X-CSRF-Token")
         self.end_headers()
+
+    def _read_json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
 
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        length = int(self.headers.get("Content-Length", 0))
-        raw_body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
-        try:
-            data = json.loads(raw_body)
-        except Exception:
-            data = {}
+
+        if path == "/health":
+            self.send_json(200, {"status": "ok", "service": "payment"})
+            return
+
+        authorized, _ = check_admin_or_internal_from_handler(self)
+        if not authorized:
+            self.send_json(401, {"error": "Unauthorized. Active Admin session or internal authorization required."})
+            return
+
+        data = self._read_json_body()
 
         if path == "/api/payment/transactions":
-            pref = str(data.get("paymentRef", "")).upper()
-            existing = next((t for t in TRANSACTIONS if t["paymentRef"] == pref), None)
-            if existing:
-                existing.update(data)
-                self.send_json(200, {"api": "API 5", "status": "updated", "transaction": existing})
+            try:
+                payment, created = _db_upsert_payment(data)
+            except ValueError as err:
+                self.send_json(400, {"error": str(err)})
+                return
+            except Exception as err:
+                self.send_json(500, {"error": f"Database error: {err}"})
+                return
+
+            if created:
+                self.send_json(201, {"api": "API 5", "status": "created", "transaction": payment})
             else:
-                if not pref:
-                    pref = f"PAY-{90000 + len(TRANSACTIONS) + 1}"
-                    data["paymentRef"] = pref
-                if "method" not in data:
-                    data["method"] = "UPI"
-                if "refundedAmount" not in data:
-                    data["refundedAmount"] = data.get("amount", 0) if data.get("status") == "REFUNDED" else 0
-                if "gatewayTxnId" not in data:
-                    data["gatewayTxnId"] = f"ZP{7300000 + len(TRANSACTIONS) * 137}"
-                TRANSACTIONS.append(data)
-                self.send_json(201, {"api": "API 5", "status": "created", "transaction": data})
+                self.send_json(200, {"api": "API 5", "status": "updated", "transaction": payment})
             return
 
         prefix = "/api/payment/transactions/"
         if path.startswith(prefix):
             pref = path[len(prefix):].upper()
-            existing = next((t for t in TRANSACTIONS if t["paymentRef"] == pref), None)
-            if existing:
-                existing.update(data)
-                self.send_json(200, {"api": "API 6", "status": "updated", "transaction": existing})
+            try:
+                updated = _db_update_payment(pref, data)
+            except ValueError as err:
+                self.send_json(400, {"error": str(err)})
                 return
-            self.send_json(404, {"error": "Payment not found"})
+            except Exception as err:
+                self.send_json(500, {"error": f"Database error: {err}"})
+                return
+
+            if updated is None:
+                self.send_json(404, {"error": "Payment not found"})
+                return
+            self.send_json(200, {"api": "API 6", "status": "updated", "transaction": updated})
             return
 
         self.send_json(404, {"error": "Unknown endpoint"})
@@ -98,17 +313,23 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
         path = parsed.path
         params = parse_qs(parsed.query)
 
+        if path == "/health":
+            self.send_json(200, {"status": "ok", "service": "payment"})
+            return
+
+        authorized, _ = check_admin_or_internal_from_handler(self)
+        if not authorized:
+            self.send_json(401, {"error": "Unauthorized. Active Admin session or internal authorization required."})
+            return
+
         # API 5: list transactions
         if path == "/api/payment/transactions":
             status_filter = params.get("status", [None])[0]
-            records = [
-                {key: txn[key] for key in (
-                    "paymentRef", "bookingRef", "airlinePnr", "payer",
-                    "method", "amount", "paidAt", "status"
-                )}
-                for txn in TRANSACTIONS
-                if not status_filter or txn["status"] == status_filter.upper()
-            ]
+            try:
+                records = _db_list_payments(status_filter)
+            except Exception as err:
+                self.send_json(500, {"error": f"Database error: {err}"})
+                return
             self.send_json(200, {
                 "api": "API 5", "count": len(records), "transactions": records
             })
@@ -118,7 +339,12 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
         prefix = "/api/payment/transactions/"
         if path.startswith(prefix):
             payment_ref = path[len(prefix):].upper()
-            txn = next((item for item in TRANSACTIONS if item["paymentRef"] == payment_ref), None)
+            try:
+                txn = _db_get_payment(payment_ref)
+            except Exception as err:
+                self.send_json(500, {"error": f"Database error: {err}"})
+                return
+
             if txn is None:
                 self.send_json(404, {"api": "API 6", "error": "Payment not found"})
                 return
@@ -137,10 +363,33 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
 
         self.send_json(404, {"error": "Unknown endpoint"})
 
+
 if __name__ == "__main__":
+    healthy, msg = check_db_health()
+    if not healthy:
+        print(f"FATAL: Cannot connect to database: {msg}")
+        sys.exit(1)
+    print(f"Database OK: {msg[:60]}")
+
+    # Apply schema safely unless skipped by launcher
+    if os.environ.get("SKIP_SCHEMA_INIT", "").lower() not in ("1", "true", "yes"):
+        try:
+            apply_schema()
+        except Exception as err:
+            print(f"FATAL: Schema initialization failed: {err}")
+            sys.exit(1)
+
     server = HTTPServer((HOST, PORT), PaymentAPIHandler)
     print(f"Zenpay API running at http://{HOST}:{PORT}")
     print("Press Ctrl+C to stop.")
+
+    def _shutdown(signum, frame):
+        print(f"\nShutting down Zenpay API (signal {signum}).")
+        server.server_close()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block header_title %}Refund Successfully Completed{% endblock %}
+
+{% block status_class %}status-completed{% endblock %}
+
+{% block content %}
+<p>
+    We are pleased to inform you that your refund of <strong style="color:#059669; font-size:16px;">{{ refund_amount }}</strong> for booking <strong>{{ booking_id }}</strong> (Case ID: <strong>{{ refund_case_id }}</strong>) has been <strong>successfully completed</strong>.
+</p>
+<p>
+    The funds have been credited back to your original payment method via the Zenpay gateway. Depending on your bank's processing cycles, the credit should reflect on your statement immediately or within 24-48 hours.
+</p>
+{% endblock %}
+
+{% block extra_details %}
+<div style="background-color:#f0fdfa; border: 1px solid #99f6e4; border-radius:8px; padding:18px 22px; margin:20px 0;">
+    <h4 style="margin:0 0 8px 0; color:#115e59; font-size:14px;">Transaction Confirmation:</h4>
+    <table style="width:100%; border-collapse:collapse; font-size:13px; color:#134e4a;">
+        <tr>
+            <td style="padding:4px 0; font-weight:500;">Payment Gateway:</td>
+            <td style="padding:4px 0; font-weight:600; text-align:right;">Zenpay Gateway Services</td>
+        </tr>
+        <tr>
+            <td style="padding:4px 0; font-weight:500;">Payment Reference:</td>
+            <td style="padding:4px 0; font-weight:600; text-align:right;">{{ payment_ref | default("PAY-CONFIRMED") }}</td>
+        </tr>
+        <tr>
+            <td style="padding:4px 0; font-weight:500;">Resolution Status:</td>
+            <td style="padding:4px 0; font-weight:700; text-align:right; color:#059669;">SETTLED & CLOSED</td>
+        </tr>
+    </table>
+</div>
+
+<p style="font-size:13px; color:#475569; margin-top:16px;">
+    Thank you for your patience while Nimbus resolved your refund across multiple airline and payment providers.
+</p>
+{% endblock %}

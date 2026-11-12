@@ -13,7 +13,7 @@ import os
 import sys
 from datetime import datetime
 from decimal import Decimal
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 # Ensure repository root is on sys.path for direct script execution
@@ -49,10 +49,11 @@ PAYMENT_API_URL = "http://127.0.0.1:8003"
 # --------------------------------------------------
 
 def fetch_json(url):
-    """Fetch JSON data from an API endpoint."""
-
+    """Fetch JSON data from an API endpoint using internal authentication header."""
+    internal_key = os.environ.get("INTERNAL_SERVICE_SECRET", "nimbus_internal_secret_key_2026")
+    req = Request(url, headers={"X-Internal-Service-Key": internal_key})
     try:
-        with urlopen(url, timeout=10) as response:
+        with urlopen(req, timeout=10) as response:
             return json.loads(
                 response.read().decode("utf-8")
             )

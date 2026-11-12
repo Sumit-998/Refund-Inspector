@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block header_title %}Refund Request Decision{% endblock %}
+
+{% block status_class %}status-rejected{% endblock %}
+
+{% block content %}
+<p>
+    We are writing to provide an update regarding your refund request for booking <strong>{{ booking_id }}</strong> (Case ID: <strong>{{ refund_case_id }}</strong>).
+</p>
+<p>
+    After thorough cross-organizational evaluation across Voyago booking policies and Meridian Air fare rules, we regret to inform you that your refund request could not be approved at this time.
+</p>
+{% endblock %}
+
+{% block extra_details %}
+<div style="background-color:#fef2f2; border: 1px solid #fecaca; border-radius:8px; padding:18px 22px; margin:20px 0;">
+    <h4 style="margin:0 0 8px 0; color:#991b1b; font-size:14px;">Reason for Decision:</h4>
+    <p style="margin:0; font-size:13px; color:#7f1d1d; line-height:1.6;">
+        {{ rejection_reason | default("The ticket was booked under a non-refundable fare class, or the cancellation request was submitted outside the allowable airline refund window.") }}
+    </p>
+</div>
+
+<p style="font-size:13px; color:#475569; margin-top:16px;">
+    If you believe this decision was made in error or have extenuating circumstances supported by medical or emergency documentation, you may request a formal appeal by contacting Nimbus Support.
+</p>
+{% endblock %}

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ subject | default("Nimbus Refund Notification") }}</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: #1e293b;
+            line-height: 1.6;
+        }
+        .email-wrapper {
+            max-width: 620px;
+            margin: 30px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e2e8f0;
+        }
+        .email-header {
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            padding: 32px 36px;
+            color: #ffffff;
+            border-bottom: 3px solid #6366f1;
+        }
+        .brand-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 6px 14px;
+            border-radius: 6px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+        .header-title {
+            margin: 0;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        .header-subtitle {
+            margin: 6px 0 0 0;
+            font-size: 13px;
+            color: #94a3b8;
+        }
+        .email-body {
+            padding: 36px;
+        }
+        .greeting {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #0f172a;
+        }
+        .lead-text {
+            font-size: 15px;
+            color: #334155;
+            margin-bottom: 24px;
+        }
+        .summary-card {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px 24px;
+            margin: 24px 0;
+        }
+        .summary-card h4 {
+            margin: 0 0 14px 0;
+            font-size: 13px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .summary-table td {
+            padding: 7px 0;
+            font-size: 14px;
+            vertical-align: top;
+        }
+        .summary-label {
+            color: #64748b;
+            width: 40%;
+            font-weight: 500;
+        }
+        .summary-value {
+            color: #0f172a;
+            font-weight: 600;
+            text-align: right;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 99px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .status-received { background-color: #dbeafe; color: #1e40af; }
+        .status-review { background-color: #e0e7ff; color: #3730a3; }
+        .status-action { background-color: #fef3c7; color: #92400e; }
+        .status-approved { background-color: #d1fae5; color: #065f46; }
+        .status-completed { background-color: #ccfbf1; color: #115e59; }
+        .status-rejected { background-color: #fee2e2; color: #991b1b; }
+
+        .instructions-box {
+            background-color: #f0fdf4;
+            border-left: 4px solid #10b981;
+            padding: 16px 20px;
+            border-radius: 0 8px 8px 0;
+            margin: 24px 0;
+        }
+        .instructions-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #166534;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .instructions-text {
+            font-size: 14px;
+            color: #14532d;
+            margin: 0;
+        }
+
+        .action-button-wrapper {
+            text-align: center;
+            margin: 32px 0 24px 0;
+        }
+        .action-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 28px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        }
+
+        .email-footer {
+            background-color: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+            padding: 24px 36px;
+            font-size: 12px;
+            color: #64748b;
+            text-align: center;
+        }
+        .footer-links {
+            margin-bottom: 12px;
+        }
+        .footer-links a {
+            color: #6366f1;
+            text-decoration: none;
+            margin: 0 8px;
+        }
+        .disclaimer {
+            font-size: 11px;
+            color: #94a3b8;
+            line-height: 1.5;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <!-- Header -->
+        <div class="email-header">
+            <div class="brand-badge">Nimbus Resolution Engine</div>
+            <h1 class="header-title">{% block header_title %}Refund Status Update{% endblock %}</h1>
+            <p class="header-subtitle">Cross-Organizational Flight Refund Resolution Portal</p>
+        </div>
+
+        <!-- Body -->
+        <div class="email-body">
+            <div class="greeting">Dear {{ customer_name | default("Customer") }},</div>
+
+            <div class="lead-text">
+                {% block content %}{% endblock %}
+            </div>
+
+            <!-- Case Summary Card -->
+            <div class="summary-card">
+                <h4>Case Summary & Verification Details</h4>
+                <table class="summary-table">
+                    <tr>
+                        <td class="summary-label">Booking Reference:</td>
+                        <td class="summary-value">{{ booking_id | default("N/A") }}</td>
+                    </tr>
+                    <tr>
+                        <td class="summary-label">Refund Case ID:</td>
+                        <td class="summary-value">{{ refund_case_id | default("N/A") }}</td>
+                    </tr>
+                    {% if refund_amount %}
+                    <tr>
+                        <td class="summary-label">Refund Amount:</td>
+                        <td class="summary-value" style="color:#059669; font-size:15px;">{{ refund_amount }}</td>
+                    </tr>
+                    {% endif %}
+                    <tr>
+                        <td class="summary-label">Current Status:</td>
+                        <td class="summary-value">
+                            <span class="status-badge {% block status_class %}status-review{% endblock %}">
+                                {{ current_status | default("PROCESSING") }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% if relevant_dates %}
+                    <tr>
+                        <td class="summary-label">Date:</td>
+                        <td class="summary-value">{{ relevant_dates.formatted | default(relevant_dates.date | default("Today")) }}</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </div>
+
+            <!-- Specific Requirements or Lists -->
+            {% block extra_details %}{% endblock %}
+
+            <!-- Additional Instructions from Admin -->
+            {% if additional_instructions %}
+            <div class="instructions-box">
+                <div class="instructions-title">Notes from Nimbus Case Specialist</div>
+                <p class="instructions-text">{{ additional_instructions }}</p>
+            </div>
+            {% endif %}
+
+            <p style="font-size:13px; color:#64748b; margin-top:28px;">
+                If you have questions regarding this notice or need further assistance, please contact the Nimbus Support Desk at <a href="mailto:support@nimbus.local" style="color:#6366f1;">support@nimbus.local</a> with reference <strong>{{ refund_case_id | default(booking_id) }}</strong>.
+            </p>
+        </div>
+
+        <!-- Footer -->
+        <div class="email-footer">
+            <div class="footer-links">
+                <a href="#">Resolution Portal</a> &bull;
+                <a href="#">Privacy Policy</a> &bull;
+                <a href="#">Terms of Service</a> &bull;
+                <a href="#">Customer Support</a>
+            </div>
+            <div>&copy; 2026 Nimbus Technologies Inc. All rights reserved.</div>
+            <div class="disclaimer">
+                This automated message was sent to {{ customer_email }}. This notification contains confidential case resolution information intended solely for the customer named above.
+            </div>
+        </div>
+    </div>
+</body>
+</html>

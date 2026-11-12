@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block header_title %}Refund Case Under Active Review{% endblock %}
+
+{% block status_class %}status-review{% endblock %}
+
+{% block content %}
+<p>
+    Your refund case <strong>{{ refund_case_id }}</strong> for booking <strong>{{ booking_id }}</strong> is currently under formal review by our resolution operations team.
+</p>
+<p>
+    Our system has identified multi-party evidence records that require specialist assessment, including airline cancellation guidelines and payment gateway authorization windows. No further action is required from you at this time.
+</p>
+{% endblock %}
+
+{% block extra_details %}
+<div style="background-color:#f5f3ff; border: 1px solid #ddd6fe; border-radius:8px; padding:18px 22px; margin:20px 0;">
+    <h4 style="margin:0 0 8px 0; color:#5b21b6; font-size:14px;">Review In Progress:</h4>
+    <p style="margin:0; font-size:13px; color:#4c1d95; line-height:1.6;">
+        Our resolution engine is actively validating transaction timestamps against airline fare rules. You will receive an automated notification as soon as the review reaches a final determination.
+    </p>
+</div>
+{% endblock %}

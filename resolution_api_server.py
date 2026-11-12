@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import mimetypes
+import signal
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -31,17 +32,172 @@ from core.integration import (
 from core.models.input_evidence import EvidenceRecord, SourceOrganization
 from core.pipeline import create_refund_case
 from person3_orchestration.orchestrator import CaseOrchestrator
+from db.connection import get_db_cursor, check_db_health, apply_schema
 
 HOST = "127.0.0.1"
-PORT = 8000
+PORT = int(os.environ.get("RESOLUTION_PORT", 8000))
 FRONTEND_DIR = os.path.join(_REPO_ROOT, "frontend")
 
+
+# ---------------------------------------------------------------------------
+# Database persistence helpers for evidence and reconciliation results
+# ---------------------------------------------------------------------------
+
+def _persist_evidence_records(records, booking_ref=None, payment_ref=None, source_name="resolution"):
+    """
+    Persists a list of EvidenceRecord (core.models.input_evidence) to the
+    evidence_records table.  Silently ignores DB errors so reconciliation
+    logic is never blocked by persistence issues.
+    """
+    try:
+        with get_db_cursor() as (cur, _):
+            for rec in records:
+                payload = {
+                    "source_organization": str(getattr(rec, "source_organization", "")),
+                    "source_record_id":    str(getattr(rec, "source_record_id", "")),
+                    "source_status":       str(getattr(rec, "source_status", "")),
+                    "customer_name":       getattr(rec, "customer_name", None),
+                    "booking_ref":         getattr(rec, "booking_ref", booking_ref),
+                    "flight_number":       getattr(rec, "flight_number", None),
+                    "flight_date":         getattr(rec, "flight_date", None),
+                    "refund_amount":       getattr(rec, "refund_amount", None),
+                    "transaction_id":      getattr(rec, "transaction_id", None),
+                    "timestamp":           str(getattr(rec, "timestamp", "")),
+                }
+                # Resolve booking_ref from evidence record or param
+                eff_bref = getattr(rec, "booking_ref", None) or booking_ref
+                eff_pref = getattr(rec, "transaction_id", None) or payment_ref
+
+                # Only use FK values that actually exist in DB to avoid FK violation
+                validated_bref = None
+                validated_pref = None
+                if eff_bref:
+                    cur.execute("SELECT 1 FROM bookings WHERE booking_ref = %s", (eff_bref,))
+                    if cur.fetchone():
+                        validated_bref = eff_bref
+                if eff_pref and eff_pref.startswith("PAY-"):
+                    cur.execute("SELECT 1 FROM payments WHERE payment_ref = %s", (eff_pref,))
+                    if cur.fetchone():
+                        validated_pref = eff_pref
+
+                cur.execute("""
+                    INSERT INTO evidence_records
+                        (booking_ref, payment_ref, source_type, external_reference,
+                         evidence_type, payload)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                """, (
+                    validated_bref,
+                    validated_pref,
+                    source_name,
+                    str(getattr(rec, "source_record_id", "")),
+                    str(getattr(rec, "source_organization", "")),
+                    json.dumps(payload),
+                ))
+    except Exception:
+        pass  # Persistence errors must not block reconciliation logic
+
+
+def _persist_refund_case(app_case, booking_ref=None, payment_ref=None):
+    """
+    Persists the ApplicationReadyCase result as a refund_cases row.
+    Returns the new refund_case_id or None on failure.
+    """
+    try:
+        case_id = app_case.meta.case_id
+        state = app_case.state.get("normalized", "UNRESOLVED")
+        rec_status = app_case.reconciliation.get("status", "UNRESOLVED")
+        jev = app_case.jev_decision_assessment
+
+        # Map normalized state to valid case_status enum
+        status_map = {
+            "COMPLETED": "COMPLETED",
+            "BLOCKED": "BLOCKED",
+            "PROCESSING_NORMALLY": "PROCESSING_NORMALLY",
+            "CONFLICTING": "CONFLICTING",
+            "UNRESOLVED": "UNRESOLVED",
+        }
+        case_status = status_map.get(state, "UNRESOLVED")
+
+        # Extract amounts from raw refund case if available
+        raw = app_case.raw_refund_case
+        expected_amount = float(getattr(raw, "refund_amount", None) or 0)
+        actual_amount = 0.0
+        if hasattr(raw, "source_records"):
+            actuals = [
+                float(r.refund_amount)
+                for r in raw.source_records
+                if getattr(r, "refund_amount", None) is not None
+            ]
+            actual_amount = max(actuals) if actuals else expected_amount
+
+        discrepancy = round(expected_amount - actual_amount, 2)
+
+        result_payload = {
+            "reconciliation_status": rec_status,
+            "confidence_score": app_case.reconciliation.get("confidence_score"),
+            "review_required": app_case.reconciliation.get("review_required", False),
+            "jev_summary": jev.summary if jev else None,
+            "jev_recommended_action": jev.recommended_action if jev else None,
+            "jev_escalation_priority": jev.escalation_priority if jev else None,
+        }
+
+        # Validate FK references
+        validated_bref = None
+        validated_pref = None
+        with get_db_cursor() as (cur, _):
+            if booking_ref:
+                cur.execute("SELECT 1 FROM bookings WHERE booking_ref = %s", (booking_ref,))
+                if cur.fetchone():
+                    validated_bref = booking_ref
+            if payment_ref:
+                cur.execute("SELECT 1 FROM payments WHERE payment_ref = %s", (payment_ref,))
+                if cur.fetchone():
+                    validated_pref = payment_ref
+
+            cur.execute("""
+                INSERT INTO refund_cases
+                    (case_identifier, booking_ref, payment_ref, case_status,
+                     expected_amount, actual_amount, discrepancy_amount,
+                     reason, reconciliation_result, review_required)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                ON CONFLICT (case_identifier) DO UPDATE SET
+                    case_status           = EXCLUDED.case_status,
+                    expected_amount       = EXCLUDED.expected_amount,
+                    actual_amount         = EXCLUDED.actual_amount,
+                    discrepancy_amount    = EXCLUDED.discrepancy_amount,
+                    reason                = EXCLUDED.reason,
+                    reconciliation_result = EXCLUDED.reconciliation_result,
+                    review_required       = EXCLUDED.review_required,
+                    updated_at            = CURRENT_TIMESTAMP
+                RETURNING refund_case_id
+            """, (
+                case_id,
+                validated_bref,
+                validated_pref,
+                case_status,
+                expected_amount,
+                actual_amount,
+                discrepancy,
+                getattr(jev, "summary", None) if jev else None,
+                json.dumps(result_payload),
+                app_case.reconciliation.get("review_required", False),
+            ))
+            row = cur.fetchone()
+            return int(row["refund_case_id"]) if row else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Pipeline functions (unchanged logic, now with persistence hooks)
+# ---------------------------------------------------------------------------
 
 def run_pipeline_for_booking(booking_ref: str):
     """
     Fetches live microservice data for a given bookingRef,
     passes it through Person 1 adapters, Person 2 pipeline,
     and Person 3 orchestrator + Jev decision engine.
+    Results are persisted to evidence_records and refund_cases.
     """
     raw_bookings = fetch_booking_data()
     raw_airline = fetch_airline_data()
@@ -84,6 +240,12 @@ def run_pipeline_for_booking(booking_ref: str):
     # Person 3 Orchestrator
     orchestrator = CaseOrchestrator()
     app_case = orchestrator.evaluate_refund_case(refund_case)
+
+    # Persist evidence and result (non-blocking)
+    payment_ref = p_raw[0].get("paymentRef") if p_raw else None
+    _persist_evidence_records(pipeline_records, booking_ref=booking_ref, payment_ref=payment_ref, source_name="live_pipeline")
+    _persist_refund_case(app_case, booking_ref=booking_ref, payment_ref=payment_ref)
+
     return app_case
 
 
@@ -124,7 +286,13 @@ def run_test_scenario(scenario_key: str):
 
     refund_case = create_refund_case(records)
     orchestrator = CaseOrchestrator()
-    return orchestrator.evaluate_refund_case(refund_case)
+    app_case = orchestrator.evaluate_refund_case(refund_case)
+
+    # Persist scenario evidence and result
+    _persist_evidence_records(records, source_name=f"scenario_{key}")
+    _persist_refund_case(app_case)
+
+    return app_case
 
 
 def run_custom_records(raw_records: list):
@@ -188,10 +356,23 @@ def run_custom_records(raw_records: list):
 
     refund_case = create_refund_case(parsed_records)
     orchestrator = CaseOrchestrator()
-    return orchestrator.evaluate_refund_case(refund_case)
+    app_case = orchestrator.evaluate_refund_case(refund_case)
 
+    # Persist custom evidence and result
+    _persist_evidence_records(parsed_records, source_name="custom")
+    _persist_refund_case(app_case)
+
+    return app_case
+
+
+# ---------------------------------------------------------------------------
+# HTTP Handler (all original endpoints preserved)
+# ---------------------------------------------------------------------------
 
 class ResolutionHubHandler(BaseHTTPRequestHandler):
+
+    def log_message(self, format, *args):
+        pass
 
     def send_json(self, status, data):
         body = json.dumps(data, default=str).encode("utf-8")
@@ -215,6 +396,10 @@ class ResolutionHubHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         params = parse_qs(parsed.query)
+
+        if path == "/health":
+            self.send_json(200, {"status": "ok", "service": "resolution"})
+            return
 
         # Health & Microservices status
         if path == "/api/status":
@@ -252,7 +437,7 @@ class ResolutionHubHandler(BaseHTTPRequestHandler):
             self.send_json(200, status_data)
             return
 
-        # List all reconciled cases or run live pipeline on query param
+        # Live reconciliation via query param
         if path == "/api/reconcile/live":
             booking_ref = params.get("bookingRef", [None])[0]
             if not booking_ref:
@@ -263,6 +448,25 @@ class ResolutionHubHandler(BaseHTTPRequestHandler):
                 self.send_json(200, app_case.model_dump(mode="json"))
             except Exception as e:
                 self.send_json(400, {"error": str(e)})
+            return
+
+        # List persisted refund cases
+        if path == "/api/reconcile/cases":
+            try:
+                with get_db_cursor() as (cur, _):
+                    cur.execute("""
+                        SELECT case_identifier, booking_ref, payment_ref, case_status,
+                               expected_amount, actual_amount, discrepancy_amount,
+                               review_required, created_at
+                        FROM refund_cases ORDER BY created_at DESC LIMIT 100
+                    """)
+                    cases = cur.fetchall()
+                self.send_json(200, {
+                    "count": len(cases),
+                    "cases": [dict(c) for c in cases]
+                })
+            except Exception as err:
+                self.send_json(500, {"error": str(err)})
             return
 
         # Static file serving from frontend/
@@ -343,17 +547,32 @@ class ResolutionHubHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = HTTPServer((HOST, PORT), ResolutionHubHandler)
+    import uvicorn
+    from core.bootstrap_admin import bootstrap_admin
+
+    healthy, msg = check_db_health()
+    if not healthy:
+        print(f"FATAL: Cannot connect to database: {msg}")
+        sys.exit(1)
+    print(f"Database OK: {msg[:60]}")
+
+    # Apply schema safely unless skipped by launcher
+    if os.environ.get("SKIP_SCHEMA_INIT", "").lower() not in ("1", "true", "yes"):
+        try:
+            apply_schema()
+            bootstrap_admin()
+        except Exception as err:
+            print(f"FATAL: Schema initialization failed: {err}")
+            sys.exit(1)
+
     print("=" * 70)
-    print(f"Fork0ff Flight Refund Resolution Hub & Server running at:")
-    print(f"  -> http://{HOST}:{PORT}/           (Unified Resolution Portal)")
-    print(f"  -> http://{HOST}:{PORT}/booking.html (Voyago Booking Website)")
-    print(f"  -> http://{HOST}:{PORT}/airline.html (Meridian Air Website)")
-    print(f"  -> http://{HOST}:{PORT}/payment.html (Zenpay Gateway Website)")
+    print(f"Nimbus Flight Refund Resolution Hub (FastAPI) running at:")
+    print(f"  -> http://{HOST}:{PORT}/login.html   (Admin Login)")
+    print(f"  -> http://{HOST}:{PORT}/             (Admin Resolution Dashboard)")
+    print(f"  -> http://{HOST}:{PORT}/booking.html (Voyago Booking Portal)")
+    print(f"  -> http://{HOST}:{PORT}/airline.html (Meridian Air Portal)")
+    print(f"  -> http://{HOST}:{PORT}/payment.html (Zenpay Gateway Portal)")
     print("=" * 70)
     print("Press Ctrl+C to stop.")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down server.")
-        server.server_close()
+
+    uvicorn.run("core.fastapi_app:app", host=HOST, port=PORT, log_level="warning")

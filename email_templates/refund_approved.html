@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block header_title %}Refund Approved{% endblock %}
+
+{% block status_class %}status-approved{% endblock %}
+
+{% block content %}
+<p>
+    Good news! Your refund request for booking <strong>{{ booking_id }}</strong> (Case ID: <strong>{{ refund_case_id }}</strong>) has been successfully verified and <strong>approved</strong>.
+</p>
+<p>
+    The approved refund amount of <strong style="color:#059669; font-size:16px;">{{ refund_amount }}</strong> has been queued for immediate processing through the Zenpay payment gateway.
+</p>
+{% endblock %}
+
+{% block extra_details %}
+<div style="background-color:#ecfdf5; border: 1px solid #a7f3d0; border-radius:8px; padding:18px 22px; margin:20px 0;">
+    <h4 style="margin:0 0 8px 0; color:#065f46; font-size:14px;">Settlement Details:</h4>
+    <ul style="margin:0; padding-left:20px; color:#064e3b; font-size:13px; line-height:1.6;">
+        <li>Refund initiated to original payment source.</li>
+        <li>Credit typically reflects in your bank account or card within 3-5 standard banking days.</li>
+        <li>You will receive a final confirmation notification once the payment gateway reports settlement completion.</li>
+    </ul>
+</div>
+{% endblock %}

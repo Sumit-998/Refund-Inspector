@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nimbus — Admin Authentication</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0b0f19;
+            --surface: #111827;
+            --surface-elevated: #1a2234;
+            --surface-hover: #222d42;
+            --border: #26334d;
+            --border-light: #374663;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.28);
+            --accent: #8b5cf6;
+            --cyan: #06b6d4;
+            --success: #10b981;
+            --danger: #ef4444;
+            --danger-glow: rgba(239, 68, 68, 0.2);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background-image: radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.12) 0%, transparent 45%),
+                              radial-gradient(circle at 85% 80%, rgba(139, 92, 246, 0.12) 0%, transparent 45%);
+        }
+
+        .login-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 100%;
+            max-width: 440px;
+            padding: 38px 34px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .login-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #6366f1, #8b5cf6, #06b6d4);
+        }
+
+        .brand-header {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 24px;
+        }
+
+        .brand-icon {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-radius: var(--radius-sm);
+            display: grid;
+            place-items: center;
+            font-size: 22px;
+            box-shadow: 0 4px 14px var(--primary-glow);
+        }
+
+        .brand-titles h1 {
+            font-size: 19px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .brand-titles p {
+            font-size: 12px;
+            color: var(--text-muted);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        .security-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(99, 102, 241, 0.12);
+            color: #a5b4fc;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 99px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 24px;
+        }
+
+        .security-badge .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #10b981;
+        }
+
+        .error-alert {
+            display: none;
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            color: #fca5a5;
+            padding: 12px 14px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            margin-bottom: 20px;
+            line-height: 1.4;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+        }
+
+        .form-input {
+            width: 100%;
+            background: var(--surface-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px 14px;
+            font-size: 14px;
+            color: var(--text);
+            outline: none;
+            font-family: inherit;
+            transition: all 0.15s ease;
+        }
+
+        .form-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-wrapper .form-input {
+            padding-right: 44px;
+        }
+
+        .toggle-password-btn {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 6px;
+            font-size: 16px;
+            display: grid;
+            place-items: center;
+            border-radius: 4px;
+            transition: color 0.15s ease;
+        }
+
+        .toggle-password-btn:hover {
+            color: var(--text);
+        }
+
+        .btn-submit {
+            width: 100%;
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            color: #ffffff;
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 13px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.15s ease;
+            box-shadow: 0 4px 14px var(--primary-glow);
+            margin-top: 8px;
+        }
+
+        .btn-submit:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-submit:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .spinner {
+            display: none;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #ffffff;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .login-footer {
+            margin-top: 26px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="brand-header">
+            <div class="brand-icon">⚡</div>
+            <div class="brand-titles">
+                <h1>Nimbus Resolution Hub</h1>
+                <p>Administrative Control Console</p>
+            </div>
+        </div>
+
+        <div class="security-badge">
+            <span class="dot"></span> Argon2 Protected &bull; Server Sessions
+        </div>
+
+        <div id="errorAlert" class="error-alert"></div>
+
+        <form id="loginForm" autocomplete="on">
+            <div class="form-group">
+                <label for="adminEmail">Admin Email</label>
+                <input
+                    type="email"
+                    id="adminEmail"
+                    name="email"
+                    class="form-input"
+                    placeholder="admin@nimbus.local"
+                    required
+                    autocomplete="username"
+                    autofocus
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="adminPassword">Admin Password</label>
+                <div class="password-wrapper">
+                    <input
+                        type="password"
+                        id="adminPassword"
+                        name="password"
+                        class="form-input"
+                        placeholder="••••••••••••"
+                        required
+                        autocomplete="current-password"
+                    >
+                    <button type="button" class="toggle-password-btn" id="btnTogglePassword" title="Show or hide password" aria-label="Toggle password visibility">
+                        <span id="pwdEyeIcon">👁️</span>
+                    </button>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-submit" id="btnSubmit">
+                <span class="spinner" id="loginSpinner"></span>
+                <span id="btnText">Sign In to Admin Dashboard</span>
+            </button>
+        </form>
+
+        <div class="login-footer">
+            Strictly Admin-only access. Customer accounts and external airline personnel do not have login privileges.
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        // Auto-check if already authenticated
+        window.addEventListener("DOMContentLoaded", async () => {
+            try {
+                const res = await fetch(`${API_BASE}/auth/me`, { credentials: "include" });
+                if (res.ok) {
+                    window.location.href = "/";
+                }
+            } catch (e) {
+                // Not authenticated, stay on login page
+            }
+        });
+
+        // Show/hide password
+        const pwdInput = document.getElementById("adminPassword");
+        const toggleBtn = document.getElementById("btnTogglePassword");
+        const eyeIcon = document.getElementById("pwdEyeIcon");
+
+        toggleBtn.addEventListener("click", () => {
+            const isPassword = pwdInput.type === "password";
+            pwdInput.type = isPassword ? "text" : "password";
+            eyeIcon.textContent = isPassword ? "🙈" : "👁️";
+        });
+
+        // Form Submission
+        const loginForm = document.getElementById("loginForm");
+        const errorAlert = document.getElementById("errorAlert");
+        const btnSubmit = document.getElementById("btnSubmit");
+        const spinner = document.getElementById("loginSpinner");
+        const btnText = document.getElementById("btnText");
+
+        function showError(msg) {
+            errorAlert.textContent = msg;
+            errorAlert.style.display = "block";
+        }
+
+        function clearError() {
+            errorAlert.textContent = "";
+            errorAlert.style.display = "none";
+        }
+
+        function setLoading(isLoading) {
+            btnSubmit.disabled = isLoading;
+            spinner.style.display = isLoading ? "inline-block" : "none";
+            btnText.textContent = isLoading ? "Authenticating..." : "Sign In to Admin Dashboard";
+        }
+
+        loginForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            clearError();
+
+            const email = document.getElementById("adminEmail").value.trim();
+            const password = pwdInput.value;
+
+            if (!email || !password) {
+                showError("Please enter both email and password.");
+                return;
+            }
+
+            setLoading(true);
+
+            try {
+                const res = await fetch(`${API_BASE}/auth/login`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    credentials: "include",
+                    body: JSON.stringify({ email, password }),
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    showError(data.detail || data.error || "Login failed. Please verify credentials.");
+                    setLoading(false);
+                    return;
+                }
+
+                // Successful login -> Redirect to dashboard
+                window.location.href = "/";
+            } catch (err) {
+                showError("Network error: Could not reach the authentication service.");
+                setLoading(false);
+            }
+        });
+    </script>
+</body>
+</html>
