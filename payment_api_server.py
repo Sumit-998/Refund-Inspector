@@ -22,7 +22,7 @@ from core.auth import check_admin_or_internal_from_handler
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PAYMENT_PORT", 8003))
 METHODS = ["UPI", "Credit Card", "Debit Card", "Net Banking"]
-VALID_STATUSES = {"SUCCESS", "REFUNDED", "FAILED", "PENDING", "PROCESSING", "SETTLED"}
+VALID_STATUSES = {"PENDING", "AUTHORIZED", "CONFIRMED", "REJECTED", "SUCCESS", "REFUNDED", "FAILED", "PROCESSING", "SETTLED"}
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +44,8 @@ def _row_to_api(row: dict) -> dict:
         "refundedAmount": float(row.get("refunded_amount") or 0),
         "gatewayTxnId":  row.get("gateway_txn_id", ""),
         "email":         row.get("email", ""),
+        "authorizedAt":  row.get("authorized_at"),
+        "decisionAt":    row.get("decision_at"),
     }
 
 
@@ -68,7 +70,7 @@ def _db_list_payments(status_filter: str | None) -> list[dict]:
     sql = """
         SELECT payment_ref, booking_ref, airline_pnr, payer_name, method,
                amount, currency, status, paid_at, refunded_amount,
-               gateway_txn_id, email
+               gateway_txn_id, email, authorized_at, decision_at
         FROM payments
     """
     params: tuple = ()
@@ -85,7 +87,7 @@ def _db_get_payment(payment_ref: str) -> dict | None:
     sql = """
         SELECT payment_ref, booking_ref, airline_pnr, payer_name, method,
                amount, currency, status, paid_at, refunded_amount,
-               gateway_txn_id, email
+               gateway_txn_id, email, authorized_at, decision_at
         FROM payments WHERE payment_ref = %s
     """
     with get_db_cursor() as (cur, _):
@@ -128,28 +130,16 @@ def _db_upsert_payment(data: dict) -> tuple[dict, bool]:
     if method not in METHODS:
         raise ValueError(f"Invalid method '{method}'. Must be one of {METHODS}")
 
-    gateway_txn_id = data.get("gatewayTxnId") or data.get("gateway_txn_id") or f"ZP{7300000 + count * 137}"
+    gateway_txn_id = data.get("gatewayTxnId") or data.get("gateway_txn_id")
 
     sql = """
         INSERT INTO payments (
             payment_ref, booking_ref, airline_pnr, payer_name, method,
             amount, currency, status, paid_at, refunded_amount,
-            gateway_txn_id, email
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (payment_ref) DO UPDATE SET
-            booking_ref     = EXCLUDED.booking_ref,
-            airline_pnr     = COALESCE(EXCLUDED.airline_pnr, payments.airline_pnr),
-            payer_name      = EXCLUDED.payer_name,
-            method          = EXCLUDED.method,
-            amount          = EXCLUDED.amount,
-            currency        = EXCLUDED.currency,
-            status          = EXCLUDED.status,
-            paid_at         = EXCLUDED.paid_at,
-            refunded_amount = EXCLUDED.refunded_amount,
-            gateway_txn_id  = COALESCE(EXCLUDED.gateway_txn_id, payments.gateway_txn_id),
-            email           = COALESCE(EXCLUDED.email, payments.email),
-            updated_at      = CURRENT_TIMESTAMP
-        RETURNING payment_ref, (xmax = 0) AS inserted
+            gateway_txn_id, email, authorized_at, decision_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (payment_ref) DO NOTHING
+        RETURNING payment_ref
     """
     params = (
         pref,
@@ -164,14 +154,62 @@ def _db_upsert_payment(data: dict) -> tuple[dict, bool]:
         refunded_amount,
         gateway_txn_id,
         data.get("email"),
+        data.get("authorizedAt"),
+        data.get("decisionAt"),
     )
     with get_db_cursor() as (cur, _):
         cur.execute(sql, params)
         row = cur.fetchone()
-        created = bool(row["inserted"]) if row else True
+        created = bool(row)
 
     payment = _db_get_payment(pref)
+    if payment and payment["bookingRef"] != booking_ref:
+        raise ValueError(f"Payment reference '{pref}' is already assigned to another booking.")
+    if payment and (payment["amount"] != amount or payment["currency"] != str(data.get("currency", "INR"))):
+        raise ValueError(f"Payment reference '{pref}' already exists with different payment details.")
     return payment, created
+
+
+def _db_transition_payment(payment_ref: str, action: str) -> dict | None:
+    transitions = {
+        "authorize": ("PENDING", "AUTHORIZED"),
+        "confirm": ("AUTHORIZED", "CONFIRMED"),
+        "reject": (("PENDING", "AUTHORIZED"), "REJECTED"),
+    }
+    if action not in transitions:
+        raise ValueError("Unknown payment decision.")
+    allowed_from, target = transitions[action]
+    allowed_from = (allowed_from,) if isinstance(allowed_from, str) else allowed_from
+    with get_db_cursor() as (cur, _):
+        cur.execute("SELECT status FROM payments WHERE payment_ref = %s FOR UPDATE", (payment_ref,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        current = row["status"]
+        if current == target:
+            return _db_get_payment(payment_ref)
+        if current not in allowed_from:
+            raise ValueError(f"Cannot {action} a payment in {current} state.")
+        cur.execute("""
+            UPDATE payments SET status = %s,
+                authorized_at = CASE WHEN %s = 'AUTHORIZED' THEN CURRENT_TIMESTAMP ELSE authorized_at END,
+                decision_at = CASE WHEN %s IN ('CONFIRMED', 'REJECTED') THEN CURRENT_TIMESTAMP ELSE decision_at END,
+                paid_at = CASE WHEN %s = 'CONFIRMED' THEN to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI') ELSE paid_at END
+            WHERE payment_ref = %s
+        """, (target, target, target, target, payment_ref))
+    return _db_get_payment(payment_ref)
+
+
+def _db_delete_payment(payment_ref: str) -> dict | None:
+    with get_db_cursor() as (cur, _):
+        cur.execute("""
+            DELETE FROM payments WHERE payment_ref = %s
+            RETURNING payment_ref, booking_ref, airline_pnr, payer_name, method,
+                      amount, currency, status, paid_at, refunded_amount,
+                      gateway_txn_id, email, authorized_at, decision_at
+        """, (payment_ref,))
+        row = cur.fetchone()
+        return _row_to_api(row) if row else None
 
 
 def _db_update_payment(payment_ref: str, data: dict) -> dict | None:
@@ -201,7 +239,9 @@ def _db_update_payment(payment_ref: str, data: dict) -> dict | None:
             paid_at         = %s,
             refunded_amount = %s,
             gateway_txn_id  = %s,
-            email           = %s
+            email           = %s,
+            authorized_at   = %s,
+            decision_at     = %s
         WHERE payment_ref = %s
     """
     params = (
@@ -214,6 +254,8 @@ def _db_update_payment(payment_ref: str, data: dict) -> dict | None:
         refunded_amount,
         merged.get("gatewayTxnId") or merged.get("gateway_txn_id"),
         merged.get("email"),
+        merged.get("authorizedAt") or merged.get("authorized_at"),
+        merged.get("decisionAt") or merged.get("decision_at"),
         payment_ref,
     )
     with get_db_cursor() as (cur, _):
@@ -236,7 +278,12 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        allowed = {"http://127.0.0.1:8000", "http://localhost:8000"}
+        if origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Internal-Service-Key, X-CSRF-Token")
         self.end_headers()
@@ -244,7 +291,12 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        allowed = {"http://127.0.0.1:8000", "http://localhost:8000"}
+        if origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Internal-Service-Key, X-CSRF-Token")
         self.end_headers()
@@ -265,12 +317,38 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"status": "ok", "service": "payment"})
             return
 
-        authorized, _ = check_admin_or_internal_from_handler(self)
+        authorized, principal = check_admin_or_internal_from_handler(self)
         if not authorized:
             self.send_json(401, {"error": "Unauthorized. Active Admin session or internal authorization required."})
             return
+        if principal and not principal.get("is_internal"):
+            import secrets
+            csrf = self.headers.get("X-CSRF-Token", "")
+            if not csrf or not secrets.compare_digest(csrf, principal.get("csrf_token", "")):
+                self.send_json(403, {"error": "Forbidden. Invalid or missing CSRF token."})
+                return
 
         data = self._read_json_body()
+
+        prefix = "/api/payment/transactions/"
+        if path.startswith(prefix) and path.rsplit("/", 1)[-1] in {"authorize", "confirm", "reject"}:
+            if not (principal or {}).get("is_internal"):
+                self.send_json(401, {"error": "Lifecycle decisions must be coordinated by the Resolution Hub."})
+                return
+            payment_ref, action = path[len(prefix):].rsplit("/", 1)
+            try:
+                payment = _db_transition_payment(payment_ref.upper(), action)
+            except ValueError as err:
+                self.send_json(409, {"error": str(err)})
+                return
+            except Exception as err:
+                self.send_json(500, {"error": f"Database error: {err}"})
+                return
+            if payment is None:
+                self.send_json(404, {"error": "Payment not found"})
+                return
+            self.send_json(200, {"status": payment["status"].lower(), "transaction": payment})
+            return
 
         if path == "/api/payment/transactions":
             try:
@@ -290,6 +368,10 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
 
         prefix = "/api/payment/transactions/"
         if path.startswith(prefix):
+            requested_status = str(data.get("status", "")).upper()
+            if requested_status in {"AUTHORIZED", "CONFIRMED", "REJECTED"} and not (principal or {}).get("is_internal"):
+                self.send_json(403, {"error": "Payment lifecycle decisions must be made through the Resolution Hub."})
+                return
             pref = path[len(prefix):].upper()
             try:
                 updated = _db_update_payment(pref, data)
@@ -307,6 +389,26 @@ class PaymentAPIHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json(404, {"error": "Unknown endpoint"})
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        authorized, principal = check_admin_or_internal_from_handler(self)
+        if not authorized or not (principal or {}).get("is_internal"):
+            self.send_json(401, {"error": "Internal service authorization required."})
+            return
+        prefix = "/api/payment/transactions/"
+        if not path.startswith(prefix):
+            self.send_json(404, {"error": "Unknown endpoint"})
+            return
+        try:
+            payment = _db_delete_payment(path[len(prefix):].upper())
+        except Exception as err:
+            self.send_json(500, {"error": f"Database error: {err}"})
+            return
+        if payment is None:
+            self.send_json(404, {"error": "Payment not found"})
+            return
+        self.send_json(200, {"status": "deleted", "transaction": payment})
 
     def do_GET(self):
         parsed = urlparse(self.path)

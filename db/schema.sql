@@ -1,7 +1,7 @@
 -- =============================================================================
 -- Nimbus-Hackathon Relational Database Schema
 -- DBMS: PostgreSQL 14+ (tested on PostgreSQL 18.6 on CachyOS / Arch Linux)
--- Entities: bookings, airline_tickets, payments, evidence_records, refund_cases
+-- Entities: users, bookings, airline_tickets, payments, evidence_records, refund_cases, admins, admin_sessions
 -- =============================================================================
 
 -- Schema Migrations Tracking
@@ -205,30 +205,11 @@ ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(us
 CREATE INDEX IF NOT EXISTS idx_bookings_user_id ON bookings(user_id);
 
 -- -----------------------------------------------------------------------------
--- Entity 8: email_logs (Audit Trail for Customer Email Communications)
--- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS email_logs (
-    email_id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT REFERENCES users(user_id) ON UPDATE CASCADE ON DELETE SET NULL,
-    refund_case_id BIGINT REFERENCES refund_cases(refund_case_id) ON UPDATE CASCADE ON DELETE SET NULL,
-    recipient_email VARCHAR(255) NOT NULL,
-    subject VARCHAR(255) NOT NULL,
-    template_name VARCHAR(100) NOT NULL,
-    delivery_status VARCHAR(50) NOT NULL,
-    error_message TEXT,
-    sent_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_email_logs_refund_case_id ON email_logs(refund_case_id);
-CREATE INDEX IF NOT EXISTS idx_email_logs_user_id ON email_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_email_logs_delivery_status ON email_logs(delivery_status);
-
 -- Record initial schema migration version
 INSERT INTO schema_migrations (version, description)
 VALUES ('001_initial_schema', 'Initial 5-entity relational schema with constraints and indexes')
 ON CONFLICT (version) DO NOTHING;
 
 INSERT INTO schema_migrations (version, description)
-VALUES ('002_admin_auth_and_email', 'Admin auth, customer users directory, and email logging tables')
+VALUES ('002_admin_auth_and_email', 'Legacy migration marker; retained for upgrade compatibility')
 ON CONFLICT (version) DO NOTHING;

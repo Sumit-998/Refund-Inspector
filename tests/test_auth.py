@@ -199,31 +199,6 @@ class TestProtectedEndpoints:
         resp = c.get("/api/reconcile/cases")
         assert resp.status_code == 401
 
-    def test_email_templates_requires_auth(self):
-        c = self._fresh()
-        resp = c.get("/api/email/templates")
-        assert resp.status_code == 401
-
-    def test_email_preview_requires_auth(self):
-        c = self._fresh()
-        resp = c.post(
-            "/api/email/preview",
-            json={"case_id": "RC-001", "template_name": "refund_received"},
-        )
-        assert resp.status_code == 401
-
-    def test_email_send_requires_auth(self):
-        c = self._fresh()
-        resp = c.post(
-            "/api/email/send",
-            json={
-                "case_id": "RC-001",
-                "template_name": "refund_received",
-                "confirmed_recipient_email": "test@example.com",
-            },
-        )
-        assert resp.status_code == 401
-
     def test_public_health_does_not_require_auth(self):
         c = self._fresh()
         resp = c.get("/health")

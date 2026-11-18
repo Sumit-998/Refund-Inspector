@@ -432,13 +432,16 @@
 
             <div class="card">
                 <h2>Airline Ticket Records</h2>
-                <p class="muted">Live records synced with Meridian Air Microservice (Port 8002). Click "Authorize Refund" or "Reconcile" to feed data to Fork0ff resolution layer.</p>
+                <p class="muted">Live tickets loaded from the Meridian Air API (Port 8002). Lifecycle status is coordinated with Booking and Payment.</p>
 
                 <div class="row">
                     <input id="q" placeholder="Search PNR, passenger, flight or booking ref" style="flex:1;min-width:240px;">
                     <select id="st">
                         <option value="">All statuses</option>
+                        <option>PENDING</option>
+                        <option>AUTHORIZED</option>
                         <option>CONFIRMED</option>
+                        <option>REJECTED</option>
                         <option>CHECKED_IN</option>
                         <option>CANCELLED</option>
                         <option>REFUNDED</option>
@@ -446,6 +449,7 @@
                     <button class="go" id="ref">Fetch via API 3</button>
                 </div>
 
+                <div id="loadMessage" class="muted" role="status">Loading airline records…</div>
                 <div class="scroll">
                     <table>
                         <thead>
@@ -543,46 +547,36 @@
     </main>
 
     <script>
-        const API_URL = "http://127.0.0.1:8002";
-
-        // Initial records fallback
-        let TICKETS = [
-            {"pnr":"MR1001","bookingRef":"BK-20001","passenger":"Aarav Sharma","flightNo":"MR201","origin":"CCU","destination":"DEL","departure":"2026-10-10 06:15","fare":5400,"status":"CONFIRMED","seat":"12A","baggageKg":15,"paymentRef":"PAY-90001","currency":"INR"},
-            {"pnr":"MR1002","bookingRef":"BK-20002","passenger":"Priya Das","flightNo":"MR305","origin":"CCU","destination":"BOM","departure":"2026-10-11 09:40","fare":6200,"status":"CHECKED_IN","seat":"14C","baggageKg":20,"paymentRef":"PAY-90002","currency":"INR"},
-            {"pnr":"MR1003","bookingRef":"BK-20003","passenger":"Rohan Mehta","flightNo":"MR118","origin":"DEL","destination":"BLR","departure":"2026-10-12 18:05","fare":7100,"status":"CONFIRMED","seat":"7F","baggageKg":15,"paymentRef":"PAY-90003","currency":"INR"},
-            {"pnr":"MR1004","bookingRef":"BK-20004","passenger":"Ananya Roy","flightNo":"MR410","origin":"BOM","destination":"CCU","departure":"2026-10-13 13:25","fare":5800,"status":"CANCELLED","seat":"—","baggageKg":0,"paymentRef":"PAY-90004","currency":"INR"},
-            {"pnr":"MR1005","bookingRef":"BK-20005","passenger":"Vikram Singh","flightNo":"MR222","origin":"BLR","destination":"HYD","departure":"2026-10-14 07:50","fare":3200,"status":"REFUNDED","seat":"—","baggageKg":0,"paymentRef":"PAY-90005","currency":"INR"},
-            {"pnr":"MR1006","bookingRef":"BK-20006","passenger":"Sneha Iyer","flightNo":"MR201","origin":"CCU","destination":"DEL","departure":"2026-10-10 06:15","fare":5400,"status":"CONFIRMED","seat":"12B","baggageKg":25,"paymentRef":"PAY-90006","currency":"INR"},
-            {"pnr":"MR1007","bookingRef":"BK-20007","passenger":"Kabir Khan","flightNo":"MR509","origin":"HYD","destination":"CCU","departure":"2026-10-15 21:10","fare":4900,"status":"CONFIRMED","seat":"3D","baggageKg":15,"paymentRef":"PAY-90007","currency":"INR"},
-            {"pnr":"MR1008","bookingRef":"BK-20008","passenger":"Meera Nair","flightNo":"MR118","origin":"DEL","destination":"BLR","departure":"2026-10-12 18:05","fare":7100,"status":"CHECKED_IN","seat":"8A","baggageKg":20,"paymentRef":"PAY-90008","currency":"INR"}
-        ];
+        const API_URL = `${window.location.protocol}//${window.location.hostname}:8002`;
+        let TICKETS = [];
+        const csrfToken = () => document.cookie.split(";").map(x => x.trim()).find(x => x.startsWith("csrf_token="))?.split("=").slice(1).join("=") || "";
 
         async function fetchAPI(path, opts = {}) {
-            try {
-                const res = await fetch(API_URL + path, opts);
-                if (res.ok) return await res.json();
-            } catch (e) {
-                console.warn("API 3/4 server offline, using local memory state:", e);
-            }
-            return null;
+            const headers = new Headers(opts.headers || {});
+            if (opts.method && opts.method !== "GET") headers.set("X-CSRF-Token", csrfToken());
+            const res = await fetch(API_URL + path, { ...opts, headers, credentials: "include" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `Airline API request failed (${res.status}).`);
+            return data;
         }
 
         const $ = s => document.querySelector(s);
 
         function renderRows(list) {
+            const esc = value => String(value ?? "—").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c]));
             $("#tb").innerHTML = list.map(t => `
                 <tr data-pnr="${t.pnr}">
-                    <td><strong>${t.pnr}</strong></td>
-                    <td><code>${t.bookingRef || '—'}</code></td>
-                    <td>${t.passenger}</td>
-                    <td>${t.flightNo}</td>
-                    <td>${t.origin} → ${t.destination}</td>
-                    <td>${t.departure}</td>
+                    <td><strong>${esc(t.pnr)}</strong></td>
+                    <td><code>${esc(t.bookingRef)}</code></td>
+                    <td>${esc(t.passenger)}</td>
+                    <td>${esc(t.flightNo)}</td>
+                    <td>${esc(t.origin)} → ${esc(t.destination)}</td>
+                    <td>${esc(t.departure)}</td>
                     <td>₹${Number(t.fare).toLocaleString("en-IN")}</td>
-                    <td><span class="pill ${t.status}">${t.status.replace("_", " ")}</span></td>
+                    <td><span class="pill ${esc(t.status)}">${esc(t.status).replace("_", " ")}</span></td>
                     <td style="display:flex;gap:6px;">
-                        <button class="action-btn" onclick="authorizeRefund('${t.pnr}')">Authorize Refund</button>
-                        <a href="index.html?bookingRef=${t.bookingRef}" class="action-btn" style="color:#a78bfa;">⚡ Reconcile</a>
+                        ${t.status === "CONFIRMED" ? `<button class="action-btn" onclick="authorizeRefund('${esc(t.pnr)}')">Authorize Refund</button>` : ""}
+                        <a href="/?bookingRef=${encodeURIComponent(t.bookingRef || "")}" class="action-btn" style="color:#a78bfa;">⚡ Reconcile</a>
                     </td>
                 </tr>
             `).join("") || `<tr><td colspan="9" style="text-align:center;color:var(--muted)">No tickets found.</td></tr>`;
@@ -590,31 +584,36 @@
 
         async function loadTickets() {
             const st = $("#st").value;
-            const res = await fetchAPI("/api/airline/tickets" + (st ? "?status=" + st : ""));
-            if (res && res.tickets) {
-                TICKETS = res.tickets;
+            $("#tb").innerHTML = '<tr><td colspan="9">Loading saved airline records…</td></tr>';
+            $("#loadMessage").textContent = "Loading records from the Airline API…";
+            try {
+                const res = await fetchAPI("/api/airline/tickets" + (st ? "?status=" + encodeURIComponent(st) : ""));
+                TICKETS = res.tickets || [];
+                const q = $("#q").value.toLowerCase();
+                const filtered = TICKETS.filter(t => !q || Object.values(t).join(" ").toLowerCase().includes(q));
+                renderRows(filtered);
+                updateStats();
+                $("#loadMessage").textContent = `${TICKETS.length} records loaded from PostgreSQL.`;
+            } catch (e) {
+                TICKETS = [];
+                $("#tb").innerHTML = `<tr><td colspan="9">${e.message}</td></tr>`;
+                $("#loadMessage").textContent = "Airline records could not be loaded.";
+                updateStats();
             }
-            const q = $("#q").value.toLowerCase();
-            const filtered = TICKETS.filter(t => {
-                const matchesStatus = !st || t.status === st;
-                const matchesQuery = !q || Object.values(t).join(" ").toLowerCase().includes(q);
-                return matchesStatus && matchesQuery;
-            });
-            renderRows(filtered);
-            updateStats();
         }
 
         async function authorizeRefund(pnr) {
             const t = TICKETS.find(x => x.pnr === pnr);
             if (!t) return;
-            t.status = "REFUNDED";
-            await fetchAPI("/api/airline/tickets", {
+            try {
+            await fetchAPI("/api/airline/tickets/" + encodeURIComponent(pnr), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(t)
+                body: JSON.stringify({ status: "REFUNDED" })
             });
             alert(`Refund authorized for PNR ${pnr}. Case status updated to REFUNDED.`);
-            loadTickets();
+            await loadTickets();
+            } catch (e) { alert(e.message); }
         }
 
         // Issue Ticket
@@ -636,31 +635,26 @@
                 currency: "INR"
             };
 
+            try {
             await fetchAPI("/api/airline/tickets", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(ticket)
             });
-
-            TICKETS.push(ticket);
             alert(`Ticket ${ticket.pnr} issued successfully!`);
             document.querySelector("nav button[data-t='tickets']").click();
-            loadTickets();
+            await loadTickets();
+            } catch (e) { alert(`Ticket was not saved: ${e.message}`); }
         };
 
         // Click row for detail
         $("#tb").onclick = async e => {
+            if (e.target.closest("button, a")) return;
             const tr = e.target.closest("tr");
             if (!tr || !tr.dataset.pnr) return;
             const pnr = tr.dataset.pnr;
-            let data = await fetchAPI("/api/airline/tickets/" + pnr);
-            if (!data) {
-                const t = TICKETS.find(x => x.pnr === pnr);
-                if (t) {
-                    const base = Math.round(t.fare * 0.82);
-                    data = { ...t, fareBreakdown: { base: base, taxes: t.fare - base, total: t.fare } };
-                }
-            }
+            try {
+            const data = await fetchAPI("/api/airline/tickets/" + encodeURIComponent(pnr));
             if (data) {
                 const f = [
                     ["PNR", data.pnr],
@@ -680,6 +674,7 @@
                 $("#detail").classList.remove("hide");
                 $("#detail").scrollIntoView({ behavior: "smooth" });
             }
+            } catch (error) { alert(error.message); }
         };
 
         function updateStats() {
@@ -709,7 +704,8 @@
         // API Console
         $("#send").onclick = async () => {
             const a = $("#arg").value.trim();
-            const path = $("#ep").value === "list" ? "/api/airline/tickets" + (a ? "?status=" + encodeURIComponent(a.toUpperCase()) : "") : "/api/airline/tickets/" + encodeURIComponent(a || "MR1001");
+            if ($("#ep").value === "one" && !a) { $("#out").textContent = "Enter a PNR to request a live record."; return; }
+            const path = $("#ep").value === "list" ? "/api/airline/tickets" + (a ? "?status=" + encodeURIComponent(a.toUpperCase()) : "") : "/api/airline/tickets/" + encodeURIComponent(a);
             $("#req").textContent = "GET " + path;
             const r = await fetchAPI(path);
             $("#out").textContent = JSON.stringify(r || { error: "Service offline" }, null, 2);

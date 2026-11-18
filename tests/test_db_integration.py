@@ -51,8 +51,8 @@ def prepare_test_db():
     with get_db_cursor(TEST_DB_URL) as (cur, _):
         cur.execute("DELETE FROM refund_cases WHERE case_identifier LIKE 'TEST-%'")
         cur.execute("DELETE FROM evidence_records WHERE source_type = 'test'")
-        cur.execute("DELETE FROM payments WHERE payment_ref LIKE 'TEST-PAY-%'")
-        cur.execute("DELETE FROM airline_tickets WHERE pnr LIKE 'TEST-MR%'")
+        cur.execute("DELETE FROM payments WHERE payment_ref LIKE 'TEST-PAY-%' OR booking_ref LIKE 'TEST-BK-%'")
+        cur.execute("DELETE FROM airline_tickets WHERE pnr LIKE 'TEST-MR%' OR booking_ref LIKE 'TEST-BK-%'")
         cur.execute("DELETE FROM bookings WHERE booking_ref LIKE 'TEST-BK-%'")
 
 
@@ -79,11 +79,11 @@ class TestDatabaseConnection:
         assert not healthy
         assert len(msg) > 0
 
-    def test_missing_url_uses_env_default(self):
+    def test_missing_url_uses_env_default(self, monkeypatch):
         """get_database_url() returns env var when set."""
-        os.environ["DATABASE_URL"] = "postgresql://postgres@localhost:5432/nimbus_db"
+        monkeypatch.setenv("DATABASE_URL", TEST_DB_URL)
         url = get_database_url()
-        assert "nimbus_db" in url
+        assert url == TEST_DB_URL
 
 
 # ---------------------------------------------------------------------------

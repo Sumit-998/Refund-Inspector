@@ -37,11 +37,15 @@ def ensure_db_and_live_services():
     2. Starts Booking (8001), Airline (8002), and Payment (8003) API servers
        in daemon threads if they are not already listening.
     """
+    test_url = os.environ.get("TEST_DATABASE_URL", "postgresql://postgres@localhost:5432/nimbus_test_db")
     dev_url = get_database_url()
-    healthy, msg = check_db_health(dev_url)
+    if "test" not in test_url.lower():
+        pytest.fail("Automated tests must use a dedicated TEST_DATABASE_URL, never DATABASE_URL.")
+    os.environ["DATABASE_URL"] = test_url
+    healthy, msg = check_db_health(test_url)
     if healthy:
-        apply_schema(dev_url)
-        with get_db_cursor(dev_url) as (cur, _):
+        apply_schema(test_url)
+        with get_db_cursor(test_url) as (cur, _):
             seed_bookings(cur)
             seed_tickets(cur)
             seed_payments(cur)
@@ -67,7 +71,7 @@ def ensure_db_and_live_services():
     # Brief delay to allow sockets to bind and listen
     time.sleep(0.5)
 
-    yield
+    yield active_servers
 
     for srv in active_servers:
         srv.shutdown()

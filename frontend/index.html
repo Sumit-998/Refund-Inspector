@@ -799,9 +799,6 @@
             <button class="tab-btn" data-tab="tab-custom" id="btnTabCustom">
                 <span>🛠️</span> Interactive Evidence Studio
             </button>
-            <button class="tab-btn" data-tab="tab-email" id="btnTabEmail">
-                <span>✉️</span> Customer Communications & Email Hub
-            </button>
         </nav>
 
         <!-- TAB 1: Live Microservice Pipeline -->
@@ -816,23 +813,40 @@
 
                 <div class="live-select-bar">
                     <select id="liveBookingSelect">
-                        <option value="BK-20006">BK-20006 — Sneha Iyer (FAILED payment -> BLOCKED)</option>
-                        <option value="BK-20001">BK-20001 — Aarav Sharma (CONFIRMED across all systems)</option>
-                        <option value="BK-20002">BK-20002 — Priya Das (Booking + Airline + Payment matched)</option>
-                        <option value="BK-20003">BK-20003 — Rohan Mehta (CONFIRMED)</option>
-                        <option value="BK-20004">BK-20004 — Ananya Roy (CANCELLED on Booking & Airline)</option>
-                        <option value="BK-20005">BK-20005 — Vikram Singh (REFUNDED on Airline & Zenpay)</option>
-                        <option value="BK-20007">BK-20007 — Kabir Khan (CONFIRMED)</option>
-                        <option value="BK-20008">BK-20008 — Meera Nair (CONFIRMED)</option>
-                        <option value="BK-20009">BK-20009 — Rahul Verma (CONFIRMED)</option>
+                        <option value="">Loading saved bookings…</option>
                     </select>
 
                     <button class="btn" id="btnRunLive">
                         <span>⚡</span> Run Live Resolution Pipeline
                     </button>
                 </div>
-                <p class="card-subtitle">Tip: You can add new bookings on <a href="booking.html" style="color:var(--cyan);text-decoration:underline;">Voyago</a>, new tickets on <a href="airline.html" style="color:var(--cyan);text-decoration:underline;">Meridian Air</a>, or new transactions on <a href="payment.html" style="color:var(--cyan);text-decoration:underline;">Zenpay</a> and they will reconcile here in real-time!</p>
+                <p class="card-subtitle">Create passenger bookings below. Airline and payment records are synchronized through their services.</p>
             </div>
+
+            <div class="card" style="margin-top:20px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Persisted passenger bookings</div>
+                    <div class="card-subtitle">Loaded from PostgreSQL through the Resolution Hub and service APIs.</div>
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-secondary" id="btnRefreshBookings">Refresh</button>
+                        <a class="btn" href="/booking.html">Create booking</a>
+                    </div>
+                </div>
+                <div id="bookingLoadMessage" class="card-subtitle" role="status" style="margin-bottom:10px;">Loading bookings…</div>
+                <div style="overflow-x:auto;">
+                    <table class="evidence-table">
+                        <thead><tr><th>Booking ref</th><th>Passenger</th><th>Flight</th><th>Route</th><th>Booking</th><th>Airline</th><th>Payment ref</th><th>Amount</th><th>Payment</th><th>Actions</th></tr></thead>
+                        <tbody id="dashboardBookings"><tr><td colspan="10">Loading bookings…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <dialog id="bookingDetailDialog" style="max-width:760px;width:90%;padding:24px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:12px;">
+                <h2 style="margin-bottom:12px;">Booking details</h2>
+                <pre id="bookingDetailContent" style="white-space:pre-wrap;overflow:auto;max-height:60vh;"></pre>
+                <button class="btn btn-secondary" id="btnCloseBookingDetail">Close</button>
+            </dialog>
         </section>
 
         <!-- TAB 2: Preset Scenarios (Matching core/test_cases.py) -->
@@ -1008,150 +1022,6 @@
             </div>
         </section>
 
-        <!-- TAB 4: Customer Communications & Email Hub -->
-        <section id="tab-email" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title"><span>✉️</span> Customer Communications & Email Management</div>
-                        <div class="card-subtitle">Generate, preview, and dispatch official HTML email notifications to customers for verified refund cases.</div>
-                    </div>
-                </div>
-
-                <!-- 1. Case Selection & Verified Recipient Card -->
-                <div style="background:var(--surface-elevated); border:1px solid var(--border); border-radius:var(--radius-md); padding:20px; margin-bottom:20px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
-                        <div style="font-weight:600; font-size:14px; color:#e2e8f0; display:flex; align-items:center; gap:8px;">
-                            <span>🎯</span> 1. Select Target Refund Case
-                        </div>
-                        <div style="display:flex; align-items:center; gap:10px;">
-                            <label style="font-size:12px; color:var(--text-muted); font-weight:500;">Refund Case / Booking:</label>
-                            <select id="emailCaseSelect" style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:8px 12px; border-radius:6px; font-size:13px; min-width:280px;">
-                                <option value="">Loading refund cases...</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Verified Recipient Details Grid -->
-                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:14px; background:rgba(0,0,0,0.3); padding:16px; border-radius:8px; border:1px solid rgba(255,255,255,0.06);">
-                        <div>
-                            <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Verified Customer</div>
-                            <div id="emailDispCustomer" style="font-size:14px; font-weight:600; color:#f8fafc; margin-top:3px;">—</div>
-                        </div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Recipient Email (PostgreSQL Verified)</div>
-                            <div id="emailDispEmail" style="font-size:14px; font-weight:600; color:#38bdf8; margin-top:3px; display:flex; align-items:center; gap:6px;">
-                                <span>🔒</span> <span>—</span>
-                            </div>
-                        </div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Booking Reference</div>
-                            <div id="emailDispBooking" style="font-size:14px; font-weight:600; color:#a78bfa; margin-top:3px;">—</div>
-                        </div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Refund Amount</div>
-                            <div id="emailDispAmount" style="font-size:14px; font-weight:700; color:#34d399; margin-top:3px;">—</div>
-                        </div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">Case Status</div>
-                            <div id="emailDispStatus" style="font-size:13px; font-weight:600; color:#cbd5e1; margin-top:3px;">—</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 2. Template Selection & Customization -->
-                <div style="background:var(--surface-elevated); border:1px solid var(--border); border-radius:var(--radius-md); padding:20px; margin-bottom:20px;">
-                    <div style="font-weight:600; font-size:14px; color:#e2e8f0; display:flex; align-items:center; gap:8px; margin-bottom:16px;">
-                        <span>📋</span> 2. Select HTML Notification Template & Customize
-                    </div>
-
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:16px;">
-                        <div>
-                            <label style="display:block; font-size:12px; font-weight:600; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px;">Email Template</label>
-                            <select id="emailTemplateSelect" style="width:100%; background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 12px; border-radius:6px; font-size:14px;">
-                                <option value="refund_received">Refund Request Received (Acknowledgment)</option>
-                                <option value="documents_required">Action Required: Verification Documents Needed</option>
-                                <option value="refund_under_review">Refund Under Active Review</option>
-                                <option value="refund_approved" selected>Refund Approved</option>
-                                <option value="refund_rejected">Refund Request Decision (Rejected)</option>
-                                <option value="refund_completed">Refund Completed & Settled</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="display:block; font-size:12px; font-weight:600; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px;">Email Subject Line</label>
-                            <input id="emailSubjectInput" style="width:100%; background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 12px; border-radius:6px; font-size:14px;" placeholder="Email subject line...">
-                        </div>
-                    </div>
-
-                    <!-- Required Documents Box (conditionally shown for documents_required) -->
-                    <div id="emailDocBox" style="display:none; margin-bottom:16px; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.3); padding:14px 16px; border-radius:6px;">
-                        <label style="display:block; font-size:12px; font-weight:700; color:#fbbf24; text-transform:uppercase; margin-bottom:6px;">Required Documents (Comma-separated)</label>
-                        <input id="emailDocsInput" style="width:100%; background:var(--surface); color:var(--text); border:1px solid var(--border); padding:8px 12px; border-radius:6px; font-size:13px;" value="Valid Government Photo ID, Cancelled Cheque / Bank Statement, Original Boarding Pass">
-                    </div>
-
-                    <!-- Additional Instructions from Admin -->
-                    <div style="margin-bottom:16px;">
-                        <label style="display:block; font-size:12px; font-weight:600; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px;">Additional Instructions / Resolution Notes</label>
-                        <textarea id="emailInstructionsInput" rows="3" style="width:100%; background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 12px; border-radius:6px; font-size:13px; font-family:inherit;" placeholder="Add custom resolution instructions for the customer (optional)..."></textarea>
-                    </div>
-
-                    <!-- Action Buttons -->
-                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-                        <button class="btn btn-secondary" id="btnPreviewEmail">
-                            <span>👁️</span> Preview Branded Email
-                        </button>
-                        <button class="btn" id="btnSendEmail" style="background:linear-gradient(135deg, #10b981, #059669); border:none;">
-                            <span>🚀</span> Send Email to Customer
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Delivery Result Alert -->
-                <div id="emailDeliveryAlert" style="display:none; padding:14px 18px; border-radius:8px; margin-bottom:20px; font-size:14px;"></div>
-
-                <!-- Interactive Email Preview Card -->
-                <div id="emailPreviewContainer" class="card" style="display:none; margin-bottom:24px; border-color:var(--primary);">
-                    <div class="card-header">
-                        <div class="card-title"><span>👁️</span> Branded HTML Email Preview</div>
-                        <div style="display:flex; gap:8px;">
-                            <button class="tab-btn active" id="btnToggleHtmlView" style="padding:6px 12px; font-size:12px;">HTML View</button>
-                            <button class="tab-btn" id="btnToggleTextView" style="padding:6px 12px; font-size:12px;">Plain-Text View</button>
-                        </div>
-                    </div>
-                    <div id="htmlPreviewWrapper" style="background:#ffffff; border-radius:8px; overflow:hidden; border:1px solid #e2e8f0; min-height:480px;">
-                        <iframe id="emailPreviewFrame" style="width:100%; height:540px; border:none; display:block;"></iframe>
-                    </div>
-                    <pre id="textPreviewWrapper" style="display:none; background:var(--surface-elevated); color:#e2e8f0; padding:16px; border-radius:8px; font-family:'JetBrains Mono',monospace; font-size:12px; white-space:pre-wrap; line-height:1.5;"></pre>
-                </div>
-
-                <!-- Email Communication History Table -->
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title"><span>📜</span> Case Email Delivery History (PostgreSQL Audit Log)</div>
-                        <button class="btn btn-secondary" id="btnRefreshEmailHistory" style="padding:6px 12px; font-size:12px;">🔄 Refresh Logs</button>
-                    </div>
-                    <div style="overflow-x:auto;">
-                        <table class="evidence-table">
-                            <thead>
-                                <tr>
-                                    <th>Email ID</th>
-                                    <th>Recipient</th>
-                                    <th>Template</th>
-                                    <th>Subject</th>
-                                    <th>Status</th>
-                                    <th>Error / Notes</th>
-                                    <th>Timestamp</th>
-                                </tr>
-                            </thead>
-                            <tbody id="emailHistoryTableBody">
-                                <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No email history for this case yet.</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </section>
-
         <!-- OUTPUT RESULTS SECTION -->
         <section id="resultsSection" class="result-container" style="display:none;">
             <!-- Header bar with Case ID and State -->
@@ -1164,9 +1034,6 @@
                     </div>
                 </div>
                 <div style="display:flex; align-items:center; gap:12px;">
-                    <button class="btn btn-secondary" id="btnEmailForCurrentCase" style="font-size:12px; padding:7px 14px; background:rgba(99,102,241,0.15); border-color:var(--primary); color:#a5b4fc;">
-                        <span>✉️</span> Email Customer for this Case
-                    </button>
                     <div id="resStateBadge" class="status-pill status-COMPLETED">
                         COMPLETED
                     </div>
@@ -1316,7 +1183,6 @@
                 document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
                 btn.classList.add("active");
                 document.getElementById(btn.dataset.tab).classList.add("active");
-                if (btn.dataset.tab === "tab-email") loadEmailHubData();
             });
         });
 
@@ -1335,10 +1201,15 @@
             if (!ok) return;
 
             checkMicroservicesStatus();
-            loadEmailTemplates();
+            loadDashboardBookings();
 
             const params = new URLSearchParams(window.location.search);
             const bref = params.get("bookingRef");
+            const newBookingRef = params.get("newBookingRef");
+            if (newBookingRef) {
+                const notice = document.getElementById("bookingLoadMessage");
+                if (notice) notice.textContent = `Booking ${newBookingRef} was saved. Current records are loaded from PostgreSQL below.`;
+            }
             if (bref) {
                 const sel = document.getElementById("liveBookingSelect");
                 let found = false;
@@ -1350,7 +1221,7 @@
                     sel.add(opt);
                 }
                 runLivePipeline(bref);
-            } else {
+            } else if (!newBookingRef) {
                 runLivePipeline("BK-20006");
             }
         });
@@ -1377,6 +1248,80 @@
             }
         }
 
+        async function loadDashboardBookings() {
+            const body = document.getElementById("dashboardBookings");
+            const message = document.getElementById("bookingLoadMessage");
+            if (!body) return;
+            body.innerHTML = '<tr><td colspan="10">Loading bookings…</td></tr>';
+            const newBookingRef = new URLSearchParams(window.location.search).get("newBookingRef");
+            if (message && !newBookingRef) message.textContent = "Loading bookings from the connected services…";
+            try {
+                const res = await authFetch(`${API_BASE}/api/bookings`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || data.error || `Request failed (${res.status})`);
+                const bookings = data.bookings || [];
+                const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+                const badge = value => `<span class="status-pill" style="font-size:11px;">${escapeHtml(value || "MISSING")}</span>`;
+                body.innerHTML = bookings.map(b => `<tr>
+                    <td><code>${escapeHtml(b.bookingRef)}</code></td><td>${escapeHtml(b.customer)}</td>
+                    <td>${escapeHtml(b.flightNo)}</td><td>${escapeHtml(b.origin)} → ${escapeHtml(b.destination)}</td>
+                    <td>${badge(b.status)}</td><td>${badge(b.airlineStatus)}</td>
+                    <td><code>${escapeHtml(b.paymentRef)}</code></td>
+                    <td>${escapeHtml(b.currency || "INR")} ${Number(b.paymentAmount ?? b.amount).toLocaleString("en-IN")}</td>
+                    <td>${badge(b.paymentStatus)}</td>
+                    <td style="white-space:nowrap;">
+                        <button class="action-btn" data-booking-action="view" data-booking-ref="${escapeHtml(b.bookingRef)}">View</button>
+                        ${b.paymentStatus === "PENDING" ? `<button class="action-btn" data-booking-action="authorize" data-booking-ref="${escapeHtml(b.bookingRef)}">Authorize</button><button class="action-btn" data-booking-action="reject" data-booking-ref="${escapeHtml(b.bookingRef)}">Reject</button>` : ""}
+                        ${b.paymentStatus === "AUTHORIZED" ? `<button class="action-btn" data-booking-action="confirm" data-booking-ref="${escapeHtml(b.bookingRef)}">Accept</button><button class="action-btn" data-booking-action="reject" data-booking-ref="${escapeHtml(b.bookingRef)}">Reject</button>` : ""}
+                        <button class="action-btn" data-booking-action="delete" data-booking-ref="${escapeHtml(b.bookingRef)}" style="color:var(--danger);">Delete</button>
+                    </td>
+                </tr>`).join("") || '<tr><td colspan="10">No bookings yet.</td></tr>';
+                const select = document.getElementById("liveBookingSelect");
+                const selected = select.value;
+                select.innerHTML = bookings.map(b => `<option value="${escapeHtml(b.bookingRef)}">${escapeHtml(b.bookingRef)} — ${escapeHtml(b.customer)}</option>`).join("") || '<option value="">No bookings available</option>';
+                if (bookings.some(b => b.bookingRef === selected)) select.value = selected;
+                if (message) {
+                    message.textContent = newBookingRef
+                        ? `Booking ${newBookingRef} was saved. Showing ${bookings.length} records loaded from PostgreSQL.`
+                        : `${bookings.length} database booking${bookings.length === 1 ? "" : "s"}.`;
+                }
+            } catch (e) {
+                body.textContent = "";
+                const row = body.insertRow(); const cell = row.insertCell(); cell.colSpan = 10; cell.textContent = e.message;
+                if (message) message.textContent = "Could not load saved bookings.";
+            }
+        }
+
+        document.getElementById("btnRefreshBookings")?.addEventListener("click", loadDashboardBookings);
+        document.getElementById("btnCloseBookingDetail")?.addEventListener("click", () => document.getElementById("bookingDetailDialog").close());
+        document.getElementById("dashboardBookings")?.addEventListener("click", async event => {
+            const button = event.target.closest("[data-booking-action]");
+            if (!button) return;
+            const action = button.dataset.bookingAction;
+            const bookingRef = button.dataset.bookingRef;
+            if (action === "delete" && !window.confirm(`Permanently delete booking ${bookingRef} and its airline/payment records? Historical evidence and refund cases will be retained.`)) return;
+            button.disabled = true;
+            try {
+                if (action === "view") {
+                    const response = await authFetch(`${API_BASE}/api/bookings/${encodeURIComponent(bookingRef)}`);
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.detail || "Could not load booking details.");
+                    document.getElementById("bookingDetailContent").textContent = JSON.stringify(result, null, 2);
+                    document.getElementById("bookingDetailDialog").showModal();
+                    return;
+                }
+                const url = action === "delete"
+                    ? `${API_BASE}/api/bookings/${encodeURIComponent(bookingRef)}`
+                    : `${API_BASE}/api/bookings/${encodeURIComponent(bookingRef)}/payment/${action}`;
+                const response = await authFetch(url, { method: action === "delete" ? "DELETE" : "POST", headers: { "Content-Type": "application/json" }, body: action === "delete" ? undefined : "{}" });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.detail || result.error || `Request failed (${response.status})`);
+                await loadDashboardBookings();
+            } catch (error) {
+                window.alert(error.message);
+            } finally { button.disabled = false; }
+        });
+
         // ── Run Live Pipeline ────────────────────────────────────────────────
         document.getElementById("btnRunLive").addEventListener("click", () => {
             const ref = document.getElementById("liveBookingSelect").value;
@@ -1398,10 +1343,6 @@
                 }
                 const caseData = await res.json();
                 renderResults(caseData);
-                // Store current case id for email hub
-                if (caseData.meta && caseData.meta.case_id) {
-                    window._lastCaseId = caseData.meta.case_id;
-                }
             } catch (err) {
                 alert("Error running live pipeline: " + err.message);
             }
@@ -1626,271 +1567,6 @@
                 setTimeout(() => btn.textContent = "📋 Copy JSON", 1800);
             });
         });
-
-        // ── "Email this case" shortcut from results panel ─────────────────────
-        const btnEmailForCurrentCase = document.getElementById("btnEmailForCurrentCase");
-        if (btnEmailForCurrentCase) {
-            btnEmailForCurrentCase.addEventListener("click", () => {
-                // Switch to email tab
-                document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-                document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-                const emailTab = document.querySelector('.tab-btn[data-tab="tab-email"]');
-                if (emailTab) emailTab.classList.add("active");
-                document.getElementById("tab-email").classList.add("active");
-                loadEmailHubData();
-            });
-        }
-
-        // ══════════════════════════════════════════════════════════════════════
-        // ── EMAIL HUB ─────────────────────────────────────────────────────────
-        // ══════════════════════════════════════════════════════════════════════
-
-        async function loadEmailTemplates() {
-            try {
-                const res = await authFetch(`${API_BASE}/api/email/templates`);
-                if (!res.ok) return;
-                const data = await res.json();
-                const sel = document.getElementById("emailTemplateSelect");
-                if (!sel) return;
-                sel.innerHTML = '<option value="">-- Select a template --</option>';
-                (data.templates || []).forEach(t => {
-                    const opt = document.createElement("option");
-                    opt.value = t.name;
-                    opt.textContent = t.label || t.name;
-                    sel.appendChild(opt);
-                });
-            } catch (e) {
-                console.warn("Could not load email templates:", e);
-            }
-        }
-
-        async function loadEmailHubData() {
-            // Load open refund cases into the case selector
-            try {
-                const res = await authFetch(`${API_BASE}/api/reconcile/cases`);
-                if (!res.ok) return;
-                const data = await res.json();
-                const sel = document.getElementById("emailCaseSelect");
-                if (!sel) return;
-                const prev = sel.value;
-                sel.innerHTML = '<option value="">-- Select a refund case --</option>';
-                (data.cases || []).forEach(c => {
-                    const opt = document.createElement("option");
-                    opt.value = c.case_id;
-                    opt.textContent = `${c.case_id} — ${c.booking_ref || ""}`;
-                    sel.appendChild(opt);
-                });
-                if (prev) sel.value = prev;
-                // If we have a last case from reconciliation, pre-select it
-                if (!sel.value && window._lastCaseId) {
-                    sel.value = window._lastCaseId;
-                }
-                if (sel.value) onEmailCaseChanged();
-            } catch (e) {
-                console.warn("Could not load cases for email hub:", e);
-            }
-        }
-
-        async function onEmailCaseChanged() {
-            const caseId = document.getElementById("emailCaseSelect")?.value;
-            const infoDiv = document.getElementById("emailCustomerInfo");
-            const previewSection = document.getElementById("emailPreviewSection");
-            if (!caseId) {
-                if (infoDiv) infoDiv.innerHTML = "";
-                if (previewSection) previewSection.style.display = "none";
-                return;
-            }
-            try {
-                const res = await authFetch(`${API_BASE}/api/email/case-customer/${encodeURIComponent(caseId)}`);
-                if (!res.ok) {
-                    if (infoDiv) infoDiv.innerHTML = `<span style="color:var(--danger)">Could not load customer info for this case.</span>`;
-                    return;
-                }
-                const d = await res.json();
-                if (infoDiv) {
-                    infoDiv.innerHTML = `
-                        <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 0;">
-                            <span>👤 <strong>${d.full_name || "Unknown"}</strong></span>
-                            <span>✉️ <code>${d.email || "—"}</code></span>
-                            <span>📋 Booking: <code>${d.booking_ref || "—"}</code></span>
-                            ${d.phone ? `<span>📞 ${d.phone}</span>` : ""}
-                        </div>`;
-                }
-                // Store for send validation
-                window._emailCustomer = d;
-            } catch (e) {
-                if (infoDiv) infoDiv.innerHTML = `<span style="color:var(--danger)">Error: ${e.message}</span>`;
-            }
-        }
-
-        // Case select change
-        const emailCaseSelect = document.getElementById("emailCaseSelect");
-        if (emailCaseSelect) {
-            emailCaseSelect.addEventListener("change", onEmailCaseChanged);
-        }
-
-        // Template change — reset preview
-        const emailTemplateSelect = document.getElementById("emailTemplateSelect");
-        if (emailTemplateSelect) {
-            emailTemplateSelect.addEventListener("change", () => {
-                const previewSection = document.getElementById("emailPreviewSection");
-                if (previewSection) previewSection.style.display = "none";
-            });
-        }
-
-        // Preview Email
-        const btnPreviewEmail = document.getElementById("btnPreviewEmail");
-        if (btnPreviewEmail) {
-            btnPreviewEmail.addEventListener("click", async () => {
-                const caseId = document.getElementById("emailCaseSelect")?.value;
-                const templateName = document.getElementById("emailTemplateSelect")?.value;
-                const instructions = document.getElementById("emailInstructions")?.value || "";
-                if (!caseId || !templateName) {
-                    alert("Please select a case and a template first.");
-                    return;
-                }
-                try {
-                    const res = await authFetch(`${API_BASE}/api/email/preview`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ case_id: caseId, template_name: templateName, additional_instructions: instructions })
-                    });
-                    if (!res.ok) {
-                        const err = await res.json();
-                        alert("Preview error: " + (err.detail || "Unknown error"));
-                        return;
-                    }
-                    const data = await res.json();
-                    // Show preview
-                    const previewSection = document.getElementById("emailPreviewSection");
-                    const previewSubject = document.getElementById("emailPreviewSubject");
-                    const previewFrame = document.getElementById("emailPreviewFrame");
-                    if (previewSubject) previewSubject.textContent = data.subject;
-                    if (previewFrame) {
-                        previewFrame.srcdoc = data.html_body;
-                    }
-                    if (previewSection) previewSection.style.display = "block";
-                    window._emailPreview = data;
-                } catch (e) {
-                    alert("Preview failed: " + e.message);
-                }
-            });
-        }
-
-        // Send Email (open confirmation modal)
-        const btnSendEmail = document.getElementById("btnSendEmail");
-        if (btnSendEmail) {
-            btnSendEmail.addEventListener("click", () => {
-                if (!window._emailPreview) {
-                    alert("Please preview the email first before sending.");
-                    return;
-                }
-                const cust = window._emailCustomer;
-                const confirmModal = document.getElementById("emailConfirmModal");
-                const confirmInfo = document.getElementById("emailConfirmInfo");
-                if (confirmInfo && cust) {
-                    confirmInfo.innerHTML = `
-                        Send <strong>${window._emailPreview.subject}</strong><br>
-                        to <strong>${cust.full_name || "Customer"}</strong>
-                        at <code>${cust.email}</code>?`;
-                }
-                if (confirmModal) confirmModal.style.display = "flex";
-            });
-        }
-
-        // Cancel send
-        const btnEmailCancelSend = document.getElementById("btnEmailCancelSend");
-        if (btnEmailCancelSend) {
-            btnEmailCancelSend.addEventListener("click", () => {
-                const confirmModal = document.getElementById("emailConfirmModal");
-                if (confirmModal) confirmModal.style.display = "none";
-            });
-        }
-
-        // Confirm send
-        const btnEmailConfirmSend = document.getElementById("btnEmailConfirmSend");
-        if (btnEmailConfirmSend) {
-            btnEmailConfirmSend.addEventListener("click", async () => {
-                const confirmModal = document.getElementById("emailConfirmModal");
-                if (confirmModal) confirmModal.style.display = "none";
-
-                const caseId = document.getElementById("emailCaseSelect")?.value;
-                const templateName = document.getElementById("emailTemplateSelect")?.value;
-                const instructions = document.getElementById("emailInstructions")?.value || "";
-                const cust = window._emailCustomer;
-                if (!caseId || !templateName || !cust) return;
-
-                const statusDiv = document.getElementById("emailSendStatus");
-                if (statusDiv) statusDiv.innerHTML = `<span style="color:var(--warning)">⏳ Sending…</span>`;
-
-                try {
-                    const res = await authFetch(`${API_BASE}/api/email/send`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            case_id: caseId,
-                            template_name: templateName,
-                            confirmed_recipient_email: cust.email,
-                            additional_instructions: instructions
-                        })
-                    });
-                    const data = await res.json();
-                    if (res.ok && data.success) {
-                        if (statusDiv) statusDiv.innerHTML = `<span style="color:var(--success)">✅ Email sent successfully! (ID: ${data.email_id})</span>`;
-                        // Reload history
-                        loadEmailHistory(caseId);
-                    } else {
-                        if (statusDiv) statusDiv.innerHTML = `<span style="color:var(--danger)">❌ Failed: ${data.detail || data.message || "Unknown error"}</span>`;
-                    }
-                } catch (e) {
-                    if (statusDiv) statusDiv.innerHTML = `<span style="color:var(--danger)">❌ Error: ${e.message}</span>`;
-                }
-            });
-        }
-
-        // Load history when case changes
-        async function loadEmailHistory(caseId) {
-            if (!caseId) return;
-            const tbody = document.getElementById("emailHistoryTableBody");
-            if (!tbody) return;
-            try {
-                const res = await authFetch(`${API_BASE}/api/email/history/${encodeURIComponent(caseId)}`);
-                if (!res.ok) { tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;color:var(--text-muted);'>Could not load history.</td></tr>"; return; }
-                const data = await res.json();
-                const logs = data.logs || [];
-                if (logs.length === 0) {
-                    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;color:var(--text-muted);'>No emails sent for this case yet.</td></tr>";
-                } else {
-                    tbody.innerHTML = logs.map(l => `
-                        <tr>
-                            <td>${l.sent_at ? new Date(l.sent_at).toLocaleString() : "—"}</td>
-                            <td>${l.template_name || "—"}</td>
-                            <td><code>${l.recipient_email || "—"}</code></td>
-                            <td>${l.subject || "—"}</td>
-                            <td><span class="scenario-badge" style="color:${l.delivery_status === 'SENT' ? 'var(--success)' : l.delivery_status === 'FAILED' ? 'var(--danger)' : 'var(--warning)'}">${l.delivery_status || "—"}</span></td>
-                        </tr>`).join("");
-                }
-            } catch (e) {
-                tbody.innerHTML = `<tr><td colspan='5' style='text-align:center;color:var(--danger);'>${e.message}</td></tr>`;
-            }
-        }
-
-        // Also reload history when case changes
-        if (emailCaseSelect) {
-            emailCaseSelect.addEventListener("change", () => {
-                loadEmailHistory(emailCaseSelect.value);
-            });
-        }
-
-        // View History button
-        const btnViewEmailHistory = document.getElementById("btnViewEmailHistory");
-        if (btnViewEmailHistory) {
-            btnViewEmailHistory.addEventListener("click", () => {
-                const caseId = document.getElementById("emailCaseSelect")?.value;
-                if (!caseId) { alert("Select a case first."); return; }
-                loadEmailHistory(caseId);
-            });
-        }
 
     </script>
 </body>

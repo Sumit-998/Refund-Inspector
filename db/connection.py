@@ -108,10 +108,10 @@ def execute_query(
 
 
 SCHEMA_MIGRATION_LOCK_ID = 74291847129841
-CURRENT_SCHEMA_VERSION = "002_admin_auth_and_email"
+CURRENT_SCHEMA_VERSION = "004_booking_payment_lifecycle"
 REQUIRED_CORE_TABLES = (
     "bookings", "airline_tickets", "payments", "evidence_records", "refund_cases",
-    "admins", "admin_sessions", "users", "email_logs"
+    "admins", "admin_sessions", "users"
 )
 
 
@@ -125,7 +125,8 @@ def apply_schema(
     Uses a PostgreSQL transaction-level advisory lock (pg_advisory_xact_lock)
     to eliminate race conditions (such as 'tuple concurrently updated') when multiple
     services or test workers start simultaneously.
-    Never uses destructive DROP commands.
+    Never resets application tables. The versioned schema contains one explicit
+    cleanup migration for the removed email_logs table requested by the owner.
     """
     if not schema_file:
         schema_file = os.path.join(os.path.dirname(__file__), "schema.sql")
@@ -168,12 +169,22 @@ def apply_schema(
         # 3. Apply schema DDL under lock
         cur.execute(sql)
 
+        # Apply ordered, idempotent SQL migrations after the baseline schema.
+        migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+        if os.path.isdir(migrations_dir):
+            for migration_name in sorted(os.listdir(migrations_dir)):
+                if not migration_name.endswith(".sql"):
+                    continue
+                migration_path = os.path.join(migrations_dir, migration_name)
+                with open(migration_path, "r", encoding="utf-8") as migration_file:
+                    cur.execute(migration_file.read())
+
         # 4. Record migration version
         cur.execute("""
             INSERT INTO schema_migrations (version, description)
             VALUES (%s, %s)
             ON CONFLICT (version) DO NOTHING;
-        """, (CURRENT_SCHEMA_VERSION, "Admin auth, customer users directory, and email logging tables"))
+        """, (CURRENT_SCHEMA_VERSION, "Booking, airline, and payment lifecycle states"))
 
     return True
 

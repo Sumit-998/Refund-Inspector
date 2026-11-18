@@ -95,10 +95,16 @@ def fetch_payment_detail(payment_ref):
 # --------------------------------------------------
 
 def parse_timestamp(value):
-    return datetime.strptime(
-        value,
-        "%Y-%m-%d %H:%M"
-    )
+    """Accept legacy minute timestamps and ISO date/timestamp API values."""
+    if not value:
+        return datetime.min
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"Unsupported timestamp value: {value!r}") from err
 
 
 def convert_to_booking_record(raw):
@@ -182,7 +188,9 @@ def convert_to_pipeline_record(record, source_name):
     return PipelineEvidenceRecord(
         source_organization=organization,
 
-        source_record_id=record.source_record_id,
+        # Some source adapters do not receive a provider-side ID; use the
+        # linked transaction/booking identifier so the evidence remains valid.
+        source_record_id=(record.source_record_id or transaction_id or booking_info.get("booking_id") or "UNKNOWN"),
         source_status=record.source_status,
 
         customer_name=customer_info.get("name"),

@@ -433,12 +433,16 @@
 
             <div class="card">
                 <h2>Payment Transactions</h2>
-                <p class="muted">Live records synced with Zenpay Payment API (Port 8003). Notice: BK-20006 is marked FAILED, which triggers a BLOCKED state in the Fork0ff reconciliation engine.</p>
+                <p class="muted">Live payment records loaded from Zenpay (Port 8003). Payment decisions are coordinated through the Resolution Hub.</p>
 
                 <div class="row">
                     <input id="q" placeholder="Search payment ref, booking ref, PNR or payer" style="flex:1;min-width:240px;">
                     <select id="st">
                         <option value="">All statuses</option>
+                        <option>PENDING</option>
+                        <option>AUTHORIZED</option>
+                        <option>CONFIRMED</option>
+                        <option>REJECTED</option>
                         <option>SUCCESS</option>
                         <option>FAILED</option>
                         <option>REFUNDED</option>
@@ -446,6 +450,7 @@
                     <button class="go" id="ref">Fetch via API 5</button>
                 </div>
 
+                <div id="loadMessage" class="muted" role="status">Loading payment records…</div>
                 <div class="scroll">
                     <table>
                         <thead>
@@ -456,7 +461,8 @@
                                 <th>Payer</th>
                                 <th>Method</th>
                                 <th>Amount (₹)</th>
-                                <th>Paid At</th>
+                                <th>Authorized At</th>
+                                <th>Decision At</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -545,80 +551,73 @@
     </main>
 
     <script>
-        const API_URL = "http://127.0.0.1:8003";
-
-        // Initial fallback data
-        let TRANSACTIONS = [
-            {"paymentRef":"PAY-90001","bookingRef":"BK-20001","airlinePnr":"MR1001","payer":"Aarav Sharma","method":"UPI","amount":5400,"status":"SUCCESS","paidAt":"2026-10-01 10:13"},
-            {"paymentRef":"PAY-90002","bookingRef":"BK-20002","airlinePnr":"MR1002","payer":"Priya Das","method":"Credit Card","amount":6200,"status":"SUCCESS","paidAt":"2026-10-01 11:41"},
-            {"paymentRef":"PAY-90003","bookingRef":"BK-20003","airlinePnr":"MR1003","payer":"Rohan Mehta","method":"Debit Card","amount":7100,"status":"SUCCESS","paidAt":"2026-10-02 09:06"},
-            {"paymentRef":"PAY-90004","bookingRef":"BK-20004","airlinePnr":"MR1004","payer":"Ananya Roy","method":"Net Banking","amount":5800,"status":"SUCCESS","paidAt":"2026-10-02 14:31"},
-            {"paymentRef":"PAY-90005","bookingRef":"BK-20005","airlinePnr":"MR1005","payer":"Vikram Singh","method":"UPI","amount":3200,"status":"REFUNDED","paidAt":"2026-10-03 08:21"},
-            {"paymentRef":"PAY-90006","bookingRef":"BK-20006","airlinePnr":"MR1006","payer":"Sneha Iyer","method":"Credit Card","amount":5400,"status":"FAILED","paidAt":"2026-10-03 16:46"},
-            {"paymentRef":"PAY-90007","bookingRef":"BK-20007","airlinePnr":"MR1007","payer":"Kabir Khan","method":"Debit Card","amount":5100,"status":"SUCCESS","paidAt":"2026-10-04 12:01"},
-            {"paymentRef":"PAY-90008","bookingRef":"BK-20008","airlinePnr":"MR1008","payer":"Meera Nair","method":"Net Banking","amount":7100,"status":"SUCCESS","paidAt":"2026-10-04 19:11"},
-            {"paymentRef":"PAY-90009","bookingRef":"BK-20009","airlinePnr":"MR1009","payer":"Rahul Verma","method":"UPI","amount":5400,"status":"SUCCESS","paidAt":"2026-10-05 07:56"}
-        ];
+        const API_URL = `${window.location.protocol}//${window.location.hostname}:8003`;
+        const HUB_URL = window.location.origin;
+        let TRANSACTIONS = [];
+        const csrfToken = () => document.cookie.split(";").map(x => x.trim()).find(x => x.startsWith("csrf_token="))?.split("=").slice(1).join("=") || "";
 
         async function fetchAPI(path, opts = {}) {
-            try {
-                const res = await fetch(API_URL + path, opts);
-                if (res.ok) return await res.json();
-            } catch (e) {
-                console.warn("API 5/6 server offline, using local memory state:", e);
-            }
-            return null;
+            const headers = new Headers(opts.headers || {});
+            if (opts.method && opts.method !== "GET") headers.set("X-CSRF-Token", csrfToken());
+            const res = await fetch(API_URL + path, { ...opts, headers, credentials: "include" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `Payment API request failed (${res.status}).`);
+            return data;
         }
 
         const $ = s => document.querySelector(s);
 
         function renderRows(list) {
+            const esc = value => String(value ?? "—").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c]));
             $("#tb").innerHTML = list.map(t => `
-                <tr data-pref="${t.paymentRef}">
-                    <td><strong>${t.paymentRef}</strong></td>
-                    <td><code>${t.bookingRef || '—'}</code></td>
-                    <td>${t.airlinePnr || '—'}</td>
-                    <td>${t.payer}</td>
-                    <td>${t.method}</td>
+                <tr data-pref="${esc(t.paymentRef)}">
+                    <td><strong>${esc(t.paymentRef)}</strong></td>
+                    <td><code>${esc(t.bookingRef)}</code></td>
+                    <td>${esc(t.airlinePnr)}</td>
+                    <td>${esc(t.payer)}</td>
+                    <td>${esc(t.method)}</td>
                     <td>₹${Number(t.amount).toLocaleString("en-IN")}</td>
-                    <td>${t.paidAt}</td>
-                    <td><span class="pill ${t.status}">${t.status}</span></td>
+                    <td>${esc(t.authorizedAt)}</td>
+                    <td>${esc(t.decisionAt)}</td>
+                    <td><span class="pill ${esc(t.status)}">${esc(t.status)}</span></td>
                     <td style="display:flex;gap:6px;">
-                        <button class="action-btn" onclick="updateStatus('${t.paymentRef}', 'REFUNDED')">Refund</button>
-                        <button class="action-btn" style="color:#ef4444;" onclick="updateStatus('${t.paymentRef}', 'FAILED')">Fail</button>
-                        <a href="index.html?bookingRef=${t.bookingRef}" class="action-btn" style="color:#a78bfa;">⚡ Reconcile</a>
+                        ${t.status === "PENDING" ? `<button class="action-btn" onclick="decidePayment('${encodeURIComponent(t.bookingRef)}','authorize')">Authorize</button><button class="action-btn" onclick="decidePayment('${encodeURIComponent(t.bookingRef)}','reject')">Reject</button>` : ""}
+                        ${t.status === "AUTHORIZED" ? `<button class="action-btn" onclick="decidePayment('${encodeURIComponent(t.bookingRef)}','confirm')">Accept</button><button class="action-btn" onclick="decidePayment('${encodeURIComponent(t.bookingRef)}','reject')">Reject</button>` : ""}
+                        <a href="/?bookingRef=${encodeURIComponent(t.bookingRef || "")}" class="action-btn" style="color:#a78bfa;">⚡ Reconcile</a>
                     </td>
                 </tr>
-            `).join("") || `<tr><td colspan="9" style="text-align:center;color:var(--muted)">No transactions found.</td></tr>`;
+            `).join("") || `<tr><td colspan="10" style="text-align:center;color:var(--muted)">No transactions found.</td></tr>`;
         }
 
         async function loadTransactions() {
             const st = $("#st").value;
-            const res = await fetchAPI("/api/payment/transactions" + (st ? "?status=" + st : ""));
-            if (res && res.transactions) {
-                TRANSACTIONS = res.transactions;
+            $("#tb").innerHTML = '<tr><td colspan="10">Loading saved payment records…</td></tr>';
+            $("#loadMessage").textContent = "Loading records from the Payment API…";
+            try {
+                const res = await fetchAPI("/api/payment/transactions" + (st ? "?status=" + encodeURIComponent(st) : ""));
+                TRANSACTIONS = res.transactions || [];
+                const q = $("#q").value.toLowerCase();
+                renderRows(TRANSACTIONS.filter(t => !q || Object.values(t).join(" ").toLowerCase().includes(q)));
+                updateStats();
+                $("#loadMessage").textContent = `${TRANSACTIONS.length} records loaded from PostgreSQL.`;
+            } catch (e) {
+                TRANSACTIONS = [];
+                $("#tb").innerHTML = `<tr><td colspan="10">${e.message}</td></tr>`;
+                $("#loadMessage").textContent = "Payment records could not be loaded.";
+                updateStats();
             }
-            const q = $("#q").value.toLowerCase();
-            const filtered = TRANSACTIONS.filter(t => {
-                const matchesStatus = !st || t.status === st;
-                const matchesQuery = !q || Object.values(t).join(" ").toLowerCase().includes(q);
-                return matchesStatus && matchesQuery;
-            });
-            renderRows(filtered);
-            updateStats();
         }
 
-        async function updateStatus(paymentRef, newStatus) {
-            const t = TRANSACTIONS.find(x => x.paymentRef === paymentRef);
-            if (!t) return;
-            t.status = newStatus;
-            await fetchAPI("/api/payment/transactions", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(t)
-            });
-            alert(`Payment ${paymentRef} updated to ${newStatus}. Reconcile on Fork0ff to observe state changes!`);
-            loadTransactions();
+        async function decidePayment(bookingRef, action) {
+            try {
+                const res = await fetch(`${HUB_URL}/api/bookings/${bookingRef}/payment/${action}`, {
+                    method: "POST", credentials: "include",
+                    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() }, body: "{}"
+                });
+                const result = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(result.detail || `Payment decision failed (${res.status}).`);
+                await loadTransactions();
+            } catch (e) { alert(e.message); }
         }
 
         // Create Transaction
@@ -635,31 +634,27 @@
                 currency: "INR"
             };
 
-            await fetchAPI("/api/payment/transactions", {
+            try {
+            const saved = await fetchAPI("/api/payment/transactions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(txn)
             });
-
-            TRANSACTIONS.push(txn);
-            alert(`Transaction ${txn.paymentRef} created successfully!`);
+            alert(`Transaction ${saved.transaction?.paymentRef || txn.paymentRef} saved successfully.`);
             document.querySelector("nav button[data-t='txns']").click();
-            loadTransactions();
+            await loadTransactions();
+            } catch (e) { alert(`Transaction was not saved: ${e.message}`); }
         };
 
         // Click row for detail
         $("#tb").onclick = async e => {
+            if (e.target.closest("button, a")) return;
             const tr = e.target.closest("tr");
             if (!tr || !tr.dataset.pref) return;
             const pref = tr.dataset.pref;
-            let data = await fetchAPI("/api/payment/transactions/" + pref);
-            if (!data) {
-                const t = TRANSACTIONS.find(x => x.paymentRef === pref);
-                if (t) {
-                    const fee = round(t.amount * 0.02);
-                    data = { ...t, gatewayFee: fee, netSettlement: t.amount - fee };
-                }
-            }
+            let data;
+            try { data = await fetchAPI("/api/payment/transactions/" + encodeURIComponent(pref)); }
+            catch (e) { alert(e.message); return; }
             if (data) {
                 const f = [
                     ["Payment Ref", data.paymentRef],
@@ -671,7 +666,9 @@
                     ["Gateway Fee (2%)", "₹" + (data.gatewayFee != null ? data.gatewayFee : 0)],
                     ["Net Settlement", "₹" + (data.netSettlement != null ? data.netSettlement : data.amount)],
                     ["Status", data.status],
-                    ["Paid At", data.paidAt]
+                    ["Paid At", data.paidAt],
+                    ["Authorized At", data.authorizedAt],
+                    ["Decision At", data.decisionAt]
                 ];
                 $("#dg").innerHTML = f.map(x => `<div><span>${x[0]}</span>${x[1]}</div>`).join("");
                 $("#detail").classList.remove("hide");
@@ -706,7 +703,8 @@
         // API Console
         $("#send").onclick = async () => {
             const a = $("#arg").value.trim();
-            const path = $("#ep").value === "list" ? "/api/payment/transactions" + (a ? "?status=" + encodeURIComponent(a.toUpperCase()) : "") : "/api/payment/transactions/" + encodeURIComponent(a || "PAY-90001");
+            if ($("#ep").value === "one" && !a) { $("#out").textContent = "Enter a payment reference to request a live record."; return; }
+            const path = $("#ep").value === "list" ? "/api/payment/transactions" + (a ? "?status=" + encodeURIComponent(a.toUpperCase()) : "") : "/api/payment/transactions/" + encodeURIComponent(a);
             $("#req").textContent = "GET " + path;
             const r = await fetchAPI(path);
             $("#out").textContent = JSON.stringify(r || { error: "Service offline" }, null, 2);

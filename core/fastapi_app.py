@@ -5,7 +5,6 @@ Integrates:
 - Admin Authentication (/auth/login, /auth/logout, /auth/me)
 - Server-Side Authorization dependencies
 - Reconciliation Pipeline APIs
-- HTML Customer Email Notification System & Management APIs
 - Static UI Serving (index.html, login.html, etc.)
 - Strict CSRF protection and rate limiting
 """
@@ -31,7 +30,7 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 from db.connection import get_db_cursor, check_db_health, apply_schema
 from core.auth import (
@@ -53,12 +52,12 @@ from core.integration import (
     fetch_airline_data,
     fetch_payment_data,
 )
-from core.email_service import (
-    list_available_templates,
-    get_case_customer_info,
-    preview_email,
-    send_customer_email,
-    get_case_email_history,
+from core.booking_lifecycle import (
+    LifecycleError,
+    list_booking_lifecycle,
+    create_booking_lifecycle,
+    change_payment_lifecycle,
+    delete_booking_lifecycle,
 )
 
 # Resolution server pipeline functions
@@ -124,21 +123,17 @@ class ReconcileCustomRequest(BaseModel):
     records: List[Dict[str, Any]] = []
 
 
-class EmailPreviewRequest(BaseModel):
-    refund_case_id: Any
-    template_name: str
-    additional_instructions: Optional[str] = ""
-    required_documents: Optional[List[str]] = None
-    custom_subject: Optional[str] = None
-
-
-class EmailSendRequest(BaseModel):
-    refund_case_id: Any
-    template_name: str
-    additional_instructions: Optional[str] = ""
-    required_documents: Optional[List[str]] = None
-    custom_subject: Optional[str] = None
-    confirmed_recipient_email: Optional[str] = None
+class BookingCreateRequest(BaseModel):
+    bookingRef: Optional[str] = None
+    customer: str
+    email: str
+    flightNo: str
+    origin: str
+    destination: str
+    flightDate: str
+    amount: float
+    currency: str = "INR"
+    paymentMethod: str = "UPI"
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +299,64 @@ async def get_microservices_status(auth: Dict[str, Any] = Depends(require_admin_
     return status_data
 
 
+@app.get("/api/bookings", tags=["Bookings"])
+async def list_live_bookings(admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Returns actual joined booking, airline, and payment API records."""
+    try:
+        bookings = list_booking_lifecycle()
+        return {"count": len(bookings), "bookings": bookings}
+    except LifecycleError as err:
+        raise HTTPException(status_code=err.status_code, detail=str(err))
+
+
+@app.get("/api/bookings/{booking_ref}", tags=["Bookings"])
+async def get_live_booking(booking_ref: str, admin: Dict[str, Any] = Depends(get_current_admin)):
+    try:
+        booking = next((row for row in list_booking_lifecycle() if row["bookingRef"] == booking_ref.upper()), None)
+        if booking is None:
+            raise HTTPException(status_code=404, detail="Booking not found.")
+        return booking
+    except LifecycleError as err:
+        raise HTTPException(status_code=err.status_code, detail=str(err))
+
+
+@app.post("/api/bookings", tags=["Bookings"])
+async def create_live_booking(
+    payload: BookingCreateRequest,
+    admin: Dict[str, Any] = Depends(get_current_admin),
+    csrf: None = Depends(verify_csrf_token),
+):
+    try:
+        return create_booking_lifecycle(payload.model_dump(exclude_none=True))
+    except LifecycleError as err:
+        raise HTTPException(status_code=err.status_code, detail=str(err))
+
+
+@app.post("/api/bookings/{booking_ref}/payment/{action}", tags=["Bookings"])
+async def decide_live_payment(
+    booking_ref: str,
+    action: str,
+    admin: Dict[str, Any] = Depends(get_current_admin),
+    csrf: None = Depends(verify_csrf_token),
+):
+    try:
+        return change_payment_lifecycle(booking_ref, action.lower())
+    except LifecycleError as err:
+        raise HTTPException(status_code=err.status_code, detail=str(err))
+
+
+@app.delete("/api/bookings/{booking_ref}", tags=["Bookings"])
+async def delete_live_booking(
+    booking_ref: str,
+    admin: Dict[str, Any] = Depends(get_current_admin),
+    csrf: None = Depends(verify_csrf_token),
+):
+    try:
+        return delete_booking_lifecycle(booking_ref)
+    except LifecycleError as err:
+        raise HTTPException(status_code=err.status_code, detail=str(err))
+
+
 @app.post("/api/reconcile/live", tags=["Reconciliation"])
 async def reconcile_live_post(
     payload: ReconcileLiveRequest,
@@ -388,88 +441,6 @@ async def list_persisted_cases(auth: Dict[str, Any] = Depends(require_admin_or_i
         }
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"Database error: {err}")
-
-
-# ---------------------------------------------------------------------------
-# HTML Email Notification & Management Endpoints (Admin-Only)
-# ---------------------------------------------------------------------------
-
-@app.get("/api/email/templates", tags=["Email"])
-async def get_email_templates(admin: Dict[str, Any] = Depends(get_current_admin)):
-    """Returns all available HTML email templates."""
-    return {"templates": list_available_templates()}
-
-
-@app.get("/api/email/case-customer/{case_id}", tags=["Email"])
-async def get_email_case_customer(
-    case_id: str,
-    admin: Dict[str, Any] = Depends(get_current_admin),
-):
-    """Fetches verified customer identity and refund details for a specific case."""
-    info = get_case_customer_info(case_id)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"Case or booking '{case_id}' not found.")
-    return info
-
-
-@app.post("/api/email/preview", tags=["Email"])
-async def preview_customer_email(
-    payload: EmailPreviewRequest,
-    admin: Dict[str, Any] = Depends(get_current_admin),
-):
-    """
-    Renders email preview with database information.
-    Does NOT send an email or alter database state.
-    """
-    try:
-        res = preview_email(
-            case_id_or_identifier=payload.refund_case_id,
-            template_name=payload.template_name,
-            additional_instructions=payload.additional_instructions or "",
-            required_documents=payload.required_documents,
-            custom_subject=payload.custom_subject,
-        )
-        return res
-    except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Preview rendering error: {err}")
-
-
-@app.post("/api/email/send", tags=["Email"])
-async def send_email_endpoint(
-    payload: EmailSendRequest,
-    admin: Dict[str, Any] = Depends(get_current_admin),
-    csrf: None = Depends(verify_csrf_token),
-):
-    """
-    Dispatches customer email notification via SMTP and logs in PostgreSQL.
-    Enforces strict recipient validation against the associated refund case.
-    """
-    try:
-        res = send_customer_email(
-            case_id_or_identifier=payload.refund_case_id,
-            template_name=payload.template_name,
-            additional_instructions=payload.additional_instructions or "",
-            required_documents=payload.required_documents,
-            custom_subject=payload.custom_subject,
-            confirmed_recipient_email=payload.confirmed_recipient_email,
-        )
-        return res
-    except ValueError as val_err:
-        raise HTTPException(status_code=400, detail=str(val_err))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Email dispatch error: {exc}")
-
-
-@app.get("/api/email/history/{case_id}", tags=["Email"])
-async def get_email_history(
-    case_id: str,
-    admin: Dict[str, Any] = Depends(get_current_admin),
-):
-    """Chronological email delivery audit logs for a refund case."""
-    history = get_case_email_history(case_id)
-    return {"count": len(history), "logs": history}
 
 
 # ---------------------------------------------------------------------------

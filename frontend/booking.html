@@ -518,15 +518,16 @@
                 <p class="muted">Submit a custom booking record directly to Voyago API Server (Port 8001).</p>
                 <div class="row">
                     <label>Customer Name<input id="inp_cust" value="Siddharth Rao"></label>
-                    <label>Booking Ref<input id="inp_bref" value="BK-20090"></label>
-                    <label>Airline PNR<input id="inp_pnr" value="MR1090"></label>
+                    <label>Customer Email<input id="inp_email" type="email" value="siddharth@example.com" required></label>
+                    <label>Booking Ref<input id="inp_bref" placeholder="Generated if blank"></label>
+                    <label>Airline PNR<input id="inp_pnr" placeholder="Assigned after ticketing"></label>
                     <label>Flight No<input id="inp_flight" value="MR201"></label>
                     <label>Origin<input id="inp_orig" value="CCU"></label>
                     <label>Destination<input id="inp_dest" value="DEL"></label>
                 </div>
                 <div class="row">
                     <label>Amount (₹)<input type="number" id="inp_amt" value="5400"></label>
-                    <label>Payment Ref<input id="inp_pref" value="PAY-90090"></label>
+                    <label>Payment Ref<input id="inp_pref" placeholder="Assigned after payment"></label>
                     <label>Status
                         <select id="inp_st">
                             <option value="CONFIRMED" selected>CONFIRMED</option>
@@ -576,51 +577,36 @@
     </main>
 
     <script>
-        const API_URL = "http://127.0.0.1:8001";
+        const API_URL = `${window.location.protocol}//${window.location.hostname}:8001`;
+        let bookingInProgress = false;
 
-        let R = [
-            ["BK-20001", "Aarav Sharma", "MR1001", "MR201", "CCU", "DEL", 5400, "PAY-90001", "CONFIRMED", "2026-10-01 10:12"],
-            ["BK-20002", "Priya Das", "MR1002", "MR305", "CCU", "BOM", 6200, "PAY-90002", "CONFIRMED", "2026-10-01 11:40"],
-            ["BK-20003", "Rohan Mehta", "MR1003", "MR118", "DEL", "BLR", 7100, "PAY-90003", "CONFIRMED", "2026-10-02 09:05"],
-            ["BK-20004", "Ananya Roy", "MR1004", "MR410", "BOM", "CCU", 5800, "PAY-90004", "CANCELLED", "2026-10-02 14:30"],
-            ["BK-20005", "Vikram Singh", "MR1005", "MR222", "BLR", "HYD", 3200, "PAY-90005", "REFUND_INITIATED", "2026-10-03 08:20"],
-            ["BK-20006", "Sneha Iyer", "MR1006", "MR201", "CCU", "DEL", 5400, "PAY-90006", "CONFIRMED", "2026-10-03 16:45"],
-            ["BK-20007", "Kabir Khan", "MR1007", "MR509", "HYD", "CCU", 5100, "PAY-90007", "CONFIRMED", "2026-10-04 12:00"],
-            ["BK-20008", "Meera Nair", "MR1008", "MR118", "DEL", "BLR", 7100, "PAY-90008", "CONFIRMED", "2026-10-04 19:10"],
-            ["BK-20009", "Rahul Verma", "MR1009", "MR201", "CCU", "DEL", 5400, "PAY-90009", "CONFIRMED", "2026-10-05 07:55"]
-        ].map(r => ({ bookingRef: r[0], customer: r[1], airlinePnr: r[2], flightNo: r[3], origin: r[4], destination: r[5], amount: r[6], paymentRef: r[7], status: r[8], bookedAt: r[9], currency: "INR", email: r[1].split(" ")[0].toLowerCase() + "@example.com" }));
+        let R = [];
 
         const F = [["MR201", "CCU", "DEL", "06:15", "08:35", 5400], ["MR214", "CCU", "DEL", "13:20", "15:40", 5900], ["MR305", "CCU", "BOM", "09:40", "12:10", 6200], ["MR118", "DEL", "BLR", "18:05", "20:50", 7100], ["MR410", "BOM", "CCU", "13:25", "15:55", 5800], ["MR222", "BLR", "HYD", "07:50", "09:00", 3200], ["MR509", "HYD", "CCU", "21:10", "23:00", 4900]];
         const CITIES = ["CCU", "DEL", "BOM", "BLR", "HYD"];
 
-        // Live API with fallback to local memory
+        function cookie(name) { return document.cookie.split("; ").map(v => v.trim()).find(v => v.startsWith(name + "="))?.slice(name.length + 1) || ""; }
+        async function createLifecycleBooking(record) {
+            const response = await fetch(`${window.location.origin}/api/bookings`, {
+                method: "POST", credentials: "include",
+                headers: { "Content-Type": "application/json", "X-CSRF-Token": cookie("csrf_token") },
+                body: JSON.stringify(record)
+            });
+            const saved = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(saved.detail || saved.error || `Booking synchronization failed (${response.status})`);
+            return saved;
+        }
         async function api(path, opts = {}) {
-            try {
-                const res = await fetch(API_URL + path, opts);
-                if (res.ok) {
-                    const data = await res.json();
-                    return { status: res.status, body: data };
-                }
-            } catch (e) {
-                console.warn("Booking API server offline, falling back to local data:", e);
-            }
-
-            // Local fallback
-            const u = new URL(path, "http://x");
-            const p = u.pathname;
-            if (p === "/api/booking/bookings") {
-                const s = u.searchParams.get("status");
-                const d = R.filter(b => !s || b.status === s);
-                return { status: 200, body: { api: "API 1", count: d.length, bookings: d } };
-            }
-            const m = p.match(/^\/api\/booking\/bookings\/([^/]+)$/);
-            if (m) {
-                const b = R.find(x => x.bookingRef === m[1].toUpperCase());
-                if (!b) return { status: 404, body: { api: "API 2", error: "Booking not found" } };
-                const fee = b.amount > 5000 ? 299 : 199, tax = Math.round((b.amount - fee) * 0.18), base = b.amount - fee - tax;
-                return { status: 200, body: { api: "API 2", ...b, fareBreakdown: { baseFare: base, taxes: tax, convenienceFee: fee, total: b.amount } } };
-            }
-            return { status: 404, body: { error: "Unknown endpoint" } };
+            const method = (opts.method || "GET").toUpperCase();
+            opts.credentials = "include";
+            opts.headers = { ...(opts.headers || {}) };
+            if (method !== "GET") opts.headers["X-CSRF-Token"] = cookie("csrf_token");
+            let res;
+            try { res = await fetch(API_URL + path, opts); }
+            catch (e) { throw new Error("Booking API is unavailable. Please try again when the service is online."); }
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body.error || body.detail || `Booking API returned HTTP ${res.status}`);
+            return { status: res.status, body };
         }
 
         const $ = s => document.querySelector(s);
@@ -644,37 +630,31 @@
         $("#find").onclick = offers;
 
         async function bookOffer(flightNo, orig, dest, amt) {
+            if (bookingInProgress) return;
             const name = prompt("Enter Traveler Passenger Name:", "New Passenger");
             if (!name) return;
-            const newRef = "BK-" + Math.floor(20000 + Math.random() * 9000);
-            const pnr = "MR" + Math.floor(1000 + Math.random() * 9000);
-            const payRef = "PAY-" + Math.floor(90000 + Math.random() * 9000);
+            const email = prompt("Enter passenger email:");
+            if (!email) return;
 
             const record = {
-                bookingRef: newRef,
+                bookingRef: `BK-${crypto.randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`,
                 customer: name,
-                airlinePnr: pnr,
+                email,
                 flightNo: flightNo,
                 origin: orig,
                 destination: dest,
                 amount: amt,
-                paymentRef: payRef,
                 status: "CONFIRMED",
                 bookedAt: new Date().toISOString().replace("T", " ").substring(0, 16),
-                currency: "INR",
-                email: name.split(" ")[0].toLowerCase() + "@example.com"
+                flightDate: $("#date").value,
+                currency: "INR"
             };
-
-            await api("/api/booking/bookings", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(record)
-            });
-
-            R.unshift(record);
-            alert(`Flight booked successfully! Booking Ref: ${newRef}, Airline PNR: ${pnr}`);
-            document.querySelector("nav button[data-t='bookings']").click();
-            load();
+            bookingInProgress = true;
+            try {
+                const saved = await createLifecycleBooking(record);
+                window.location.assign(`/?newBookingRef=${encodeURIComponent(saved.bookingRef)}`);
+            } catch (e) { alert(e.message); }
+            finally { bookingInProgress = false; }
         }
 
         function rows(list) {
@@ -698,59 +678,57 @@
         async function initiateRefund(bookingRef) {
             const b = R.find(x => x.bookingRef === bookingRef);
             if (!b) return;
-            b.status = "REFUND_INITIATED";
-            await api("/api/booking/bookings", {
+            try { await api("/api/booking/bookings/" + encodeURIComponent(bookingRef), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(b)
-            });
-            alert(`Refund initiated for ${bookingRef}. Status updated to REFUND_INITIATED. Reconcile on Fork0ff to observe!`);
-            load();
+                body: JSON.stringify({ status: "REFUND_INITIATED" })
+            }); alert(`Refund initiated for ${bookingRef}.`); await load(); }
+            catch (e) { alert(e.message); }
         }
 
         async function load() {
             const stVal = $("#st").value;
-            const r = await api("/api/booking/bookings" + (stVal ? "?status=" + stVal : ""));
-            if (r.body && r.body.bookings) {
-                R = r.body.bookings;
-            }
-            const q = $("#q").value.toLowerCase();
-            rows(R.filter(t => (!stVal || t.status === stVal) && (!q || Object.values(t).join(" ").toLowerCase().includes(q))));
-            stats();
+            $("#tb").innerHTML = '<tr><td colspan="8">Loading bookings…</td></tr>';
+            try {
+                const result = await api("/api/booking/bookings" + (stVal ? "?status=" + stVal : ""));
+                R = result.body.bookings || [];
+                const q = $("#q").value.toLowerCase();
+                rows(R.filter(t => (!q || Object.values(t).join(" ").toLowerCase().includes(q)))); stats();
+            } catch (e) { $("#tb").innerHTML = `<tr><td colspan="8">${e.message}</td></tr>`; R = []; stats(); }
         }
 
         // Create Booking form submit
         $("#btnCreateBooking").onclick = async () => {
+            const button = $("#btnCreateBooking");
+            if (button.disabled) return;
             const record = {
                 customer: $("#inp_cust").value,
-                bookingRef: $("#inp_bref").value.toUpperCase(),
-                airlinePnr: $("#inp_pnr").value.toUpperCase(),
+                email: $("#inp_email").value.trim(),
+                bookingRef: $("#inp_bref").value.trim().toUpperCase() || `BK-${crypto.randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`,
+                airlinePnr: $("#inp_pnr").value.trim().toUpperCase() || undefined,
                 flightNo: $("#inp_flight").value.toUpperCase(),
                 origin: $("#inp_orig").value.toUpperCase(),
                 destination: $("#inp_dest").value.toUpperCase(),
                 amount: Number($("#inp_amt").value) || 5400,
-                paymentRef: $("#inp_pref").value.toUpperCase(),
+                paymentRef: $("#inp_pref").value.trim().toUpperCase() || undefined,
                 status: $("#inp_st").value,
                 bookedAt: new Date().toISOString().replace("T", " ").substring(0, 16),
-                currency: "INR"
+                currency: "INR",
+                flightDate: new Date().toISOString().slice(0, 10)
             };
-
-            await api("/api/booking/bookings", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(record)
-            });
-
-            R.unshift(record);
-            alert(`Booking ${record.bookingRef} created successfully!`);
-            document.querySelector("nav button[data-t='bookings']").click();
-            load();
+            if (!record.customer.trim() || !record.email || !record.flightNo || !record.origin || !record.destination || !Number.isFinite(record.amount) || record.amount < 0) { alert("Complete the required customer, contact, flight, route, and amount fields."); return; }
+            button.disabled = true; button.textContent = "Saving…";
+            try {
+                const saved = await createLifecycleBooking(record);
+                window.location.assign(`/?newBookingRef=${encodeURIComponent(saved.bookingRef)}`);
+            } catch (e) { alert(`Booking was not saved: ${e.message}`); }
+            finally { button.disabled = false; button.textContent = "Create Booking & Save to API 1"; }
         };
 
         $("#tb").onclick = async e => {
             const tr = e.target.closest("tr");
             if (!tr || !tr.dataset.p || e.target.tagName === "BUTTON" || e.target.tagName === "A") return;
-            const r = (await api("/api/booking/bookings/" + tr.dataset.p)).body;
+            let r; try { r = (await api("/api/booking/bookings/" + tr.dataset.p)).body; } catch (e) { alert(e.message); return; }
             const fee = r.fareBreakdown ? r.fareBreakdown.convenienceFee : 199;
             const taxes = r.fareBreakdown ? r.fareBreakdown.taxes : Math.round(r.amount * 0.18);
             const base = r.fareBreakdown ? r.fareBreakdown.baseFare : r.amount - taxes - fee;
@@ -802,7 +780,6 @@
         }
 
         offers();
-        stats();
         load();
     </script>
 </body>

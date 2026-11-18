@@ -22,7 +22,7 @@ from core.auth import check_admin_or_internal_from_handler
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AIRLINE_PORT", 8002))
 
-VALID_STATUSES = {"CONFIRMED", "CHECKED_IN", "CANCELLED", "REFUNDED", "ON_HOLD"}
+VALID_STATUSES = {"PENDING", "AUTHORIZED", "CONFIRMED", "REJECTED", "CHECKED_IN", "CANCELLED", "REFUNDED", "ON_HOLD"}
 
 
 # ---------------------------------------------------------------------------
@@ -126,21 +126,8 @@ def _db_upsert_ticket(data: dict) -> tuple[dict, bool]:
             pnr, booking_ref, passenger, flight_no, origin, destination,
             departure, fare, status, seat, baggage_kg, payment_ref, currency
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (pnr) DO UPDATE SET
-            booking_ref  = EXCLUDED.booking_ref,
-            passenger    = EXCLUDED.passenger,
-            flight_no    = EXCLUDED.flight_no,
-            origin       = EXCLUDED.origin,
-            destination  = EXCLUDED.destination,
-            departure    = EXCLUDED.departure,
-            fare         = EXCLUDED.fare,
-            status       = EXCLUDED.status,
-            seat         = COALESCE(EXCLUDED.seat, airline_tickets.seat),
-            baggage_kg   = EXCLUDED.baggage_kg,
-            payment_ref  = COALESCE(EXCLUDED.payment_ref, airline_tickets.payment_ref),
-            currency     = EXCLUDED.currency,
-            updated_at   = CURRENT_TIMESTAMP
-        RETURNING pnr, (xmax = 0) AS inserted
+        ON CONFLICT (pnr) DO NOTHING
+        RETURNING pnr
     """
     params = (
         pnr,
@@ -160,9 +147,11 @@ def _db_upsert_ticket(data: dict) -> tuple[dict, bool]:
     with get_db_cursor() as (cur, _):
         cur.execute(sql, params)
         row = cur.fetchone()
-        created = bool(row["inserted"]) if row else True
+        created = bool(row)
 
     ticket = _db_get_ticket(pnr)
+    if ticket and ticket["bookingRef"] != booking_ref:
+        raise ValueError(f"PNR '{pnr}' is already assigned to another booking.")
     return ticket, created
 
 
@@ -213,6 +202,18 @@ def _db_update_ticket(pnr: str, data: dict) -> dict | None:
     return _db_get_ticket(pnr)
 
 
+def _db_delete_ticket(pnr: str) -> dict | None:
+    with get_db_cursor() as (cur, _):
+        cur.execute("""
+            DELETE FROM airline_tickets
+            WHERE pnr = %s
+            RETURNING pnr, booking_ref, passenger, flight_no, origin, destination,
+                      departure, fare, status, seat, baggage_kg, payment_ref, currency
+        """, (pnr,))
+        row = cur.fetchone()
+        return _row_to_api(row) if row else None
+
+
 # ---------------------------------------------------------------------------
 # HTTP Handler
 # ---------------------------------------------------------------------------
@@ -227,7 +228,12 @@ class AirlineAPIHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        allowed = {"http://127.0.0.1:8000", "http://localhost:8000"}
+        if origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Internal-Service-Key, X-CSRF-Token")
         self.end_headers()
@@ -235,7 +241,12 @@ class AirlineAPIHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        allowed = {"http://127.0.0.1:8000", "http://localhost:8000"}
+        if origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Internal-Service-Key, X-CSRF-Token")
         self.end_headers()
@@ -256,10 +267,16 @@ class AirlineAPIHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"status": "ok", "service": "airline"})
             return
 
-        authorized, _ = check_admin_or_internal_from_handler(self)
+        authorized, principal = check_admin_or_internal_from_handler(self)
         if not authorized:
             self.send_json(401, {"error": "Unauthorized. Active Admin session or internal authorization required."})
             return
+        if principal and not principal.get("is_internal"):
+            import secrets
+            csrf = self.headers.get("X-CSRF-Token", "")
+            if not csrf or not secrets.compare_digest(csrf, principal.get("csrf_token", "")):
+                self.send_json(403, {"error": "Forbidden. Invalid or missing CSRF token."})
+                return
 
         data = self._read_json_body()
 
@@ -347,6 +364,26 @@ class AirlineAPIHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json(404, {"error": "Unknown endpoint"})
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        authorized, principal = check_admin_or_internal_from_handler(self)
+        if not authorized or not (principal or {}).get("is_internal"):
+            self.send_json(401, {"error": "Internal service authorization required."})
+            return
+        prefix = "/api/airline/tickets/"
+        if not path.startswith(prefix):
+            self.send_json(404, {"error": "Unknown endpoint"})
+            return
+        try:
+            ticket = _db_delete_ticket(path[len(prefix):].upper())
+        except Exception as err:
+            self.send_json(500, {"error": f"Database error: {err}"})
+            return
+        if ticket is None:
+            self.send_json(404, {"error": "Ticket not found"})
+            return
+        self.send_json(200, {"status": "deleted", "ticket": ticket})
 
 
 if __name__ == "__main__":
